@@ -1,0 +1,592 @@
+use either::Either;
+
+use crate::file::AFile;
+use crate::ctx::AdelaideContext;
+use crate::lexer::{Span, Token};
+use crate::util::{AError, Id, Intern};
+use crate::parser::*;
+use crate::parser::util::*;
+
+grammar(file: Id<AFile>, ctx: &dyn AdelaideContext);
+
+extern {
+    type Error = AError;
+    type Location = usize;
+
+    enum Token {
+        "." => Token::Dot,
+        ".." => Token::DotDot,
+        "..." => Token::Ellipsis,
+        "," => Token::Comma,
+        ",,," => Token::Commalipses,
+        ":" => Token::Colon,
+        "::" => Token::ColonColon,
+        ";" => Token::SemiColon,
+        ":<" => Token::ColonLt,
+        "{" => Token::LBrace,
+        "}" => Token::RBrace,
+        "[" => Token::LSqBracket,
+        "]" => Token::RSqBracket,
+        "<" => Token::Lt,
+        ">" => Token::Gt,
+        "(" => Token::LParen,
+        ")" => Token::RParen,
+        "->" => Token::RArrow,
+        "=>" => Token::RBigArrow,
+        "_" => Token::Underscore,
+        "?" => Token::Question,
+
+        "<=" => Token::LessEqual,
+        ">=" => Token::GreaterEqual,
+        "==" => Token::EqualsEquals,
+        "!=" => Token::NotEquals,
+        "&" => Token::And,
+        "|" => Token::Pipe,
+        "&?" => Token::AndShort,
+        "|?" => Token::PipeShort,
+        "=" => Token::Equals,
+        "!" => Token::Bang,
+        "+" => Token::Plus,
+        "-" => Token::Minus,
+        "*" => Token::Star,
+        "/" => Token::Slash,
+        "%" => Token::Modulo,
+
+        "use" => Token::Use,
+        "pub" => Token::Pub,
+        "mod" => Token::Mod,
+        "fn" => Token::Fn,
+        "extern" => Token::Extern,
+        "let" => Token::Let,
+        "trait" => Token::Trait,
+        "impl" => Token::Impl,
+        "where" => Token::Where,
+        "for" => Token::For,
+        "in" => Token::In,
+        "as" => Token::As,
+        "if" => Token::If,
+        "else" => Token::Else,
+        "while" => Token::While,
+        "break" => Token::Break,
+        "continue" => Token::Continue,
+        "at" => Token::At,
+        "return" => Token::Return,
+        "assert" => Token::Assert,
+        "true" => Token::True,
+        "false" => Token::False,
+        "object" => Token::Object,
+        "type" => Token::Type,
+        "self" => Token::SelfRef,
+        "allocate" => Token::Allocate,
+        "enum" => Token::Enum,
+        "match" => Token::Match,
+        "instruction" => Token::Instruction,
+        "async" => Token::Async,
+        "await" => Token::Await,
+
+        "Int" => Token::Int,
+        "Float" => Token::Float,
+        "Bool" => Token::Bool,
+        "String" => Token::StringType,
+        "Char" => Token::Char,
+        "Self" => Token::SelfType,
+        "Fn" => Token::FnTrait,
+        "Dyn" => Token::DynTrait,
+
+        String => Token::String(<Id<str>>),
+        Integer => Token::IntLiteral(<Id<str>>),
+        Float => Token::FloatLiteral(<Id<str>>),
+        InstructionLiteral => Token::InstructionLiteral(<Id<str>>),
+        Char => Token::CharLiteral(<char>),
+
+        InterpolateBegin => Token::InterpolateBegin(<Id<str>>),
+        InterpolateContinue => Token::InterpolateContinue(<Id<str>>),
+        InterpolateEnd => Token::InterpolateEnd(<Id<str>>),
+
+        Identifier => Token::Identifier(<Id<str>>),
+        TypeName => Token::TypeName(<Id<str>>),
+    }
+}
+
+CommaTrailingOrEmpty<T>: Vec<T> = {
+    <v:(<T> ",")*> <e:T?> => append_maybe(v, e),
+};
+
+CommaTrailing<T>: Vec<T> = {
+    <T> => vec![<>],
+    <v:(<T> ",")+> <e:T?> => append_maybe(v, e),
+};
+
+Comma<T>: Vec<T> = {
+    <v:(<T> ",")*> <e:T> => append(v, e),
+};
+
+PlusSeparated<T>: Vec<T> = {
+    <v:(<T> "+")*> <e:T> => append(v, e),
+};
+
+// --- Paths --- //
+
+IdentifierPath: Vec<Id<str>> = {
+    <p:IdentifierPath> "::" <i:Identifier> => append(p, i),
+    <i:Identifier> => vec![i],
+};
+
+TypeNamePath: Vec<Id<str>> = {
+    <p:IdentifierPath> "::" <t:TypeName> => append(p, t),
+    <t:TypeName> => vec![t],
+};
+
+// --- Items --- //
+
+pub Module = <Item*>;
+
+Item: PItem = {
+    <Global> => PItem::Global(<>),
+}
+
+// --- Types --- //
+
+Type: Id<PType> = {
+    <ClosureParameterType>,
+
+    // Closure types can't be the parameter type to a closure itself, because
+    // `||||` is ambiguous apparently.
+    <l:@L> "|" <p: CommaTrailingOrEmpty<ClosureParameterType>> "|" <r: MaybeReturn> <h:@R> =>
+        PType::closure_type(Span(file, l, h), p, r).intern(ctx),
+};
+
+ClosureParameterType: Id<PType> = {
+    <AssociableType<"">>,
+    <TupleType>,
+
+    <l:@L> "_" <h:@R> => PType::infer(Span(file, l, h)).intern(ctx),
+    <l:@L> "[" <t: Type> "]" <h:@R> => PType::array(Span(file, l, h), t).intern(ctx),
+
+    // This is not allowed to be in the RHS of an "expr as Ty"
+    <l:@L> "fn" "(" <p: CommaTrailingOrEmpty<Type>> ")" <r: MaybeReturn> <h:@R> =>
+        PType::fn_ptr_type(Span(file, l, h), p, r).intern(ctx),
+};
+
+AssociableType<Kind>: Id<PType> = {
+    // Any type can be accessed with brackets, e.g. `<()>:AssociatedType`
+    "<" <Type> ">",
+
+    <l:@L> "Int" <h:@R> => PType::int_type(Span(file, l, h)).intern(ctx),
+    <l:@L> "Float" <h:@R> => PType::float_type(Span(file, l, h)).intern(ctx),
+    <l:@L> "Bool" <h:@R> => PType::bool_type(Span(file, l, h)).intern(ctx),
+    <l:@L> "String" <h:@R> => PType::string_type(Span(file, l, h)).intern(ctx),
+    <l:@L> "Char" <h:@R> => PType::char_type(Span(file, l, h)).intern(ctx),
+    <l:@L> "Self" <h:@R> => PType::self_type(Span(file, l, h)).intern(ctx),
+
+    <l:@L> "<" <t:Type> "as" <tr:TraitTypeWithAssocs> ">" <h:@R> =>
+        PType::elaborated_type(Span(file, l, h), t, tr).intern(ctx),
+
+    <l:@L> "Dyn" <tr:MaybeDynTraits> <h:@R> =>
+        PType::dynamic_type(Span(file, l, h), tr).intern(ctx),
+
+    <ComplexSubtype<Kind>>,
+}
+
+ComplexSubtype<Kind>: Id<PType> = {
+    // Object or enum types, with optional generic. E.g. `Option<Int>`
+    <l:@L> <t:TypeNamePath> <g:MaybeGenerics<Kind>> <h:@R> =>
+        PType::ambiguous(Span(file, l, h), t, g).intern(ctx),
+
+    <l:@L> <t:AssociableType<Kind>> "::" <a:TypeName> <h:@R> =>
+        PType::associated_type(Span(file, l, h), t, a).intern(ctx),
+};
+
+TupleType: Id<PType> = {
+    <l:@L> "(" ")" <h:@R> => PType::tuple(Span(file, l, h), vec![]).intern(ctx),
+    <l:@L> "(" <v:(<Type> ",")+> <e:Type?> ")" <h:@R> => PType::tuple(Span(file, l, h), append_maybe(v, e)).intern(ctx),
+};
+
+TypeRestriction: (Id<PType>, Vec<Id<PTraitType>>) = {
+    <Type> ":" <PlusSeparated<TraitTypeWithAssocs>>,
+};
+
+TraitType: PTraitType = {
+    <l:@L> <t:TypeNamePath> <g:MaybeGenerics<"">> <h:@R> => 
+        PTraitType::new_generics(Span(file, l, h), t, g),
+};
+
+MaybeGenerics<Kind> = {
+    ":<" <CommaTrailing<Type>> ">",
+    "<" <CommaTrailing<Type>> ">" if Kind != "Expr",
+    () => vec![],
+};
+
+MaybeDynTraits: Vec<Id<PTraitType>> = {
+    "<" <PlusSeparated<TraitTypeWithAssocs>> ">",
+}
+
+TraitTypeWithAssocs: Id<PTraitType> = {
+    <l:@L> <t:TypeNamePath> <g:MaybeGenericsOrAssoc> <h:@R> => 
+        PTraitType::new_mixed(Span(file, l, h), t, g).intern(ctx),
+    <l:@L> "Fn" "(" <p:CommaTrailingOrEmpty<Type>> ")" <r:MaybeReturn> <h:@R> => 
+        PTraitType::fn_trait(Span(file, l, h), p, r).intern(ctx),
+};
+
+MaybeGenericsOrAssoc = {
+    ":<" <CommaTrailing<TypeOrBinding>> ">",
+    "<" <CommaTrailing<TypeOrBinding>> ">",
+    () => vec![],
+};
+
+TypeOrBinding: Either<Id<PType>, (Id<str>, Id<PType>)> = {
+    <Type> => Either::Left(<>),
+    <TypeName> "=" <Type> => Either::Right((<>)),
+};
+
+MaybeReturn: Id<PType> = {
+    "->" <Type>,
+    <l:@L> () <h:@R> => PType::infer(Span(file, l, h)).intern(ctx),
+};
+
+// --- Global --- //
+
+Global: Id<PGlobal> = {
+    "let" <l:@L> <i:Identifier> <h:@R> ":" <t:Type> "=" <e:Expression> "."+ =>
+        PGlobal::new(Span(file, l, h), i, t, e).intern(ctx),
+};
+
+// --- Statement --- //
+
+Block: Id<PExpression> = {
+    <l:@L> "{" "."* "}" <h:@R> => 
+        PExpression::block(
+            Span(file, l, h), 
+            vec![], 
+            PExpression::unit(Span(file, l, h)).intern(ctx)
+        ).intern(ctx),
+    <l:@L> "{" "."* <v:(<Statement>)*> <e:Expression> "}" <h:@R> => 
+        PExpression::block(Span(file, l, h), v, e).intern(ctx),
+    <l:@L> "{" "."* <v:(<Statement>)*> <d:DottedStatement> <el:@L> "}" <h:@R> =>
+        PExpression::block(
+            Span(file, l, h), 
+            append(v, d), 
+            PExpression::unit(Span(file, el, h)).intern(ctx)
+        ).intern(ctx),
+};
+
+Statement: Id<PStatement> = {
+    <l:@L> <e:UndottableExpression> <h:@R> => 
+        PStatement::expression_statement(Span(file, l, h), e).intern(ctx),
+    <DottedStatement>,
+};
+
+DottedStatement: Id<PStatement> = {
+    <l:@L> "let" <p:Pattern> "=" <e:Expression> "." <h:@R> "."* => 
+        PStatement::let_statement(Span(file, l, h), p, e).intern(ctx),
+    <l:@L> <e:Expression> "." <h:@R> "."* => 
+        PStatement::expression_statement(Span(file, l, h), e).intern(ctx),
+};
+
+// --- Expression --- //
+
+LBinOp<Operators, Term>: Id<PExpression> = {
+    <l:@L> <a:LBinOp<Operators, Term>> <o:Operators> <b:Term> <h:@R> => 
+        PExpression::binop(Span(file, l, h), a, PBinopKind::from(o), b).intern(ctx),
+    <Term>,
+};
+
+// Prec0 = { "..", unary postfix "...", "=" };
+Prec1 = { "|?" };
+Prec2 = { "&?" };
+Prec3 = { "|" };
+Prec4 = { "&" };
+Prec5 = { "<", ">", "<=", ">=", "==", "!=" };
+Prec6 = { "+", "-" };
+Prec7 = { "*", "/", "%" };
+// Prec8 = { unary prefix "!", unary prefix "-" }
+
+Expression = Expression0<"">;
+PreblockExpression = Expression0<"PreBlock">;
+
+Expression0<Kind>: Id<PExpression> = {
+    <l:@L> <a:Expression1<Kind>> "=" <b:Expression0<Kind>> <h:@R> =>
+        PExpression::assign(Span(file, l, h), a, b).intern(ctx),
+    <l:@L> <a:Expression1<Kind>> <t:".."> <b:Expression1<Kind>> <h:@R> =>
+        PExpression::binop(Span(file, l, h), a, PBinopKind::from(t), b).intern(ctx),
+    <l:@L> <a:Expression1<Kind>> <t:"..."> <h:@R> =>
+        PExpression::infinite_range(Span(file, l, h), a).intern(ctx),
+    <Expression1<Kind>>,
+};
+
+Expression1<Kind> = {
+    <UndottableExpression>,
+    <AsyncBlockExpression>,
+    <ClosureExpression<Kind>>,
+    <ControlFlowExpression<Kind>>,
+    <LBinOp<Prec1, Expression2<Kind>>>,
+};
+
+Expression2<Kind> = LBinOp<Prec2, Expression3<Kind>>;
+Expression3<Kind> = LBinOp<Prec3, Expression4<Kind>>;
+Expression4<Kind> = LBinOp<Prec4, Expression5<Kind>>;
+Expression5<Kind> = LBinOp<Prec5, Expression6<Kind>>;
+Expression6<Kind> = LBinOp<Prec6, Expression7<Kind>>;
+Expression7<Kind> = LBinOp<Prec7, Expression8<Kind>>;
+
+Expression8<Kind> = {
+    <l:@L> "!" <e:Expression8<Kind>> <h:@R> => 
+        PExpression::not(Span(file, l, h), e).intern(ctx),
+    <l:@L> "-" <e:Expression8<Kind>> <h:@R> => 
+        PExpression::neg(Span(file, l, h), e).intern(ctx),
+    <Expression9<Kind>>,
+};
+
+Expression9<Kind> = {
+    <l:@L> <e:Expression9<Kind>> "?" <h:@R> => 
+        PExpression::throw(Span(file, l, h), e).intern(ctx),
+    <Expression10<Kind>>,
+}
+
+Expression10<Kind> = BaseExpression<Kind>;
+
+AsyncBlockExpression: Id<PExpression> = {
+    <l:@L> "async" <b:Block> <h:@R> =>
+        PExpression::async_block_expr(Span(file, l, h), b).intern(ctx),
+};
+
+ClosureExpression<Kind>: Id<PExpression> = {
+    <l:@L> "|" <p:CommaTrailingOrEmpty<Pattern>> "|" "->" <r:Type> <b:Block> <h:@R> =>
+        PExpression::closure(Span(file, l, h), p, r, b).intern(ctx),
+    <l:@L> "|" <cr:@R> <p:CommaTrailingOrEmpty<Pattern>> "|" <e:Expression1<Kind>> <h:@R> =>
+        PExpression::closure(Span(file, l, h), p, PType::infer(Span(file, l, cr)).intern(ctx), e).intern(ctx),
+};
+
+// "Control-flow" expressions. These are not all control-flow (e.g. `assert`),
+// but are characterized as being quite statement-like and they have especially low precedence.
+ControlFlowExpression<Kind>: Id<PExpression> = {
+    <l:@L> "assert" <e:Expression2<Kind>> <h:@R> =>
+        PExpression::assert_statement(Span(file, l, h), e).intern(ctx),
+    <l:@L> "return" <h:@R> =>
+        PExpression::return_nothing(Span(file, l, h)).intern(ctx),
+    <l:@L> "return" <e:Expression2<Kind>> <h:@R> =>
+        PExpression::return_statement(Span(file, l, h), e).intern(ctx),
+    <l:@L> "break" <e:Expression2<Kind>?> <el:@L> <h:@R> =>
+        PExpression::break_stmt(Span(file, l, h), e, None).intern(ctx),
+    <l:@L> "break" <e:Expression2<Kind>?> "at" <il:@L> <i:Identifier> <h:@R> =>
+        PExpression::break_stmt(Span(file, l, h), e, Some((Span(file, il, h), i))).intern(ctx),
+    <l:@L> "continue" <h:@R> =>
+        PExpression::continue_stmt(Span(file, l, h), None).intern(ctx),
+    <l:@L> "continue" "at" <il:@L> <i:Identifier> <h:@R> =>
+        PExpression::continue_stmt(Span(file, l, h), Some((Span(file, il, h), i))).intern(ctx),
+};
+
+BaseExpression<Kind>: Id<PExpression> = {
+    // Any expression that can be on the LHS of the `()` operator, e.g. `Call` trait
+    <CallableExpression>,
+    // Array access syntax. Even non-callable base expressions can be accessed.
+    <l:@L> <c:BaseExpression<Kind>> "[" <i:Expression> "]" <h:@R> =>
+        PExpression::access(Span(file, l, h), c, i).intern(ctx),
+    // An object-access or object-call
+    <l:@L> <e:BaseExpression<Kind>> ":" <id:Identifier> <c:MaybeObjectCall> <h:@R> => match c {
+        None => 
+            PExpression::object_access(Span(file, l, h), e, id).intern(ctx),
+        Some((generics, args)) => 
+            PExpression::object_call(Span(file, l, h), e, id, generics, args).intern(ctx),
+    },
+    // Tuple access, e.g. `(1, 2):0`
+    <l:@L> <e:BaseExpression<Kind>> ":" <id:Integer> <h:@R> =>
+        PExpression::tuple_acess(Span(file, l, h), e, id).intern(ctx),
+    // Await operator
+    <l:@L> <ex:BaseExpression<Kind>> ":" "await" <h:@R> => PExpression::await_expr(Span(file, l, h), ex).intern(ctx),
+    // Enum or struct constructor
+    <l:@L> <o:ComplexSubtype<"Expr">> <a:ConstructorArguments<Kind>> <h:@R> =>
+        PExpression::structural_constructor(Span(file, l, h), o, a).intern(ctx),
+    // Object allocation, e.g. `allocate Box { item: 1 }`
+    // NOTE: This cannot exist in a position preceding a block,
+    // e.g. `if allocate Box { item: 1 }` is illegal.
+    <l:@L> "allocate" <o:ComplexSubtype<"Expr">> <a:ConstructorArguments<Kind>> <h:@R> =>
+        PExpression::allocate_object(Span(file, l, h), o, a).intern(ctx),
+};
+
+CallableExpression: Id<PExpression> = {
+    "(" <Expression> ")",
+    <TupleExpression>,
+    <IdentifierExpression>,
+    <l:@L> <e:Literal> <h:@R> => 
+        PExpression::literal(Span(file, l, h), e).intern(ctx),
+    <l:@L> "self" <h:@R> => 
+        PExpression::self_ref(Span(file, l, h)).intern(ctx),
+    <l:@L> ",,," <h:@R> => 
+        PExpression::unimplemented(Span(file, l, h)).intern(ctx),
+    <l:@L> "allocate" "[" <t:Type> ";" <n:Expression> "]" <h:@R> => 
+        PExpression::allocate_array(Span(file, l, h), t, n).intern(ctx),
+    <l:@L> "[" <e:CommaTrailingOrEmpty<Expression>> "]" <h:@R> => 
+        PExpression::array_literal(Span(file, l, h), e).intern(ctx),
+    <l:@L> <s:InterpolateBegin> <s2:InterpolateBody> <h:@R> => 
+        PExpression::string_interpolation_begin(Span(file, l, h), s, s2).intern(ctx),
+    <l:@L> <c:CallableExpression> "(" <p:CommaTrailingOrEmpty<Expression>> ")" <h:@R> => 
+        PExpression::expr_call(Span(file, l, h), c, p).intern(ctx),
+    <l:@L> <t:AssociableType<"Expr">> "::" <f:Identifier> <g:MaybeColonExprGenerics> "(" <p:CommaTrailingOrEmpty<Expression>> ")" <h:@R> => 
+        PExpression::static_call(Span(file, l, h), t, f, g, p).intern(ctx),
+};
+
+// These are block-like expressions, and they are important because
+// they can stand as statements without an extra `.` operator.
+UndottableExpression: Id<PExpression> = {
+    <Block>,
+    <IfStatement>,
+    <l:@L> <a:MaybeLabel> "while" <c:PreblockExpression> <b:Block> <e:MaybeElseBlock> <h:@R> => 
+        PExpression::while_loop(Span(file, l, h), a, c, b, e).intern(ctx),
+    <l:@L> <a:MaybeLabel> "for" <p:Pattern> "in" <c:PreblockExpression> <b:Block> <e:MaybeElseBlock> <h:@R> => 
+        PExpression::for_loop(Span(file, l, h), a, p, c, b, e).intern(ctx),
+    <l:@L> "match" <c:PreblockExpression> <h:@R> "{" <b:CommaTrailingOrEmpty<MatchBranch>> "}" => 
+        PExpression::match_statement(Span(file, l, h), c, b).intern(ctx),
+};
+
+MaybeObjectCall: Option<(Vec<Id<PType>>, Vec<Id<PExpression>>)> = {
+    <MaybeColonExprGenerics> "(" <CommaTrailingOrEmpty<Expression>> ")" => Some((<>)),
+    () => None,
+};
+
+IfStatement: Id<PExpression> = {
+    <l:@L> "if" <c:PreblockExpression> <b:Block> <e:MaybeElseOrIfBlock> <h:@R> =>
+        PExpression::if_statement(Span(file, l, h), c, b, e).intern(ctx),
+    <l:@L> "if" "let" <p:Pattern> "=" <c:PreblockExpression> <b:Block> <e:MaybeElseOrIfBlock> <h:@R> => 
+        PExpression::if_let_statement(Span(file, l, h), p, c, b, e).intern(ctx),
+};
+
+MaybeElseOrIfBlock: Id<PExpression> = {
+    <l:@L> () <h:@R> => PExpression::unit(Span(file, l, h)).intern(ctx),
+    "else" <Block>,
+    // `if` expressions are the only ones that can be chained
+    // after an `else` without an additional block.
+    "else" <IfStatement>,
+};
+
+MaybeElseBlock: Id<PExpression> = {
+    <l:@L> () <h:@R> => PExpression::unit(Span(file, l, h)).intern(ctx),
+    "else" <Block>,
+};
+
+IdentifierExpression: Id<PExpression> = {
+    <l:@L> <i:IdentifierPath> <g:MaybeGenerics<"Expr">> <h:@R> => 
+        PExpression::identifiers(Span(file, l, h), i, g).intern(ctx),
+};
+
+InterpolateBody: Id<PExpression> = {
+    <l:@L> <e:Expression> <s:InterpolateContinue> <s2:InterpolateBody> <h:@R> => 
+        PExpression::string_interpolation_continue(Span(file, l, h), e, s, s2).intern(ctx),
+    <l:@L> <e:Expression> <s:InterpolateEnd> <h:@R> => 
+        PExpression::string_interpolation_end(Span(file, l, h), e, s).intern(ctx),
+};
+
+TupleExpression: Id<PExpression> = {
+    <l:@L> "(" ")" <h:@R> => PExpression::nothing(Span(file, l, h)).intern(ctx),
+    <l:@L> "(" <v:(<Expression> ",")+> <e:Expression?> ")" <h:@R> =>
+        PExpression::tuple_literal(Span(file, l, h), append_maybe(v, e)).intern(ctx),
+};
+
+Literal: PLiteral = {
+    "true" => PLiteral::True,
+    "false" => PLiteral::False,
+    <String> => PLiteral::String(<>),
+    <Integer> => PLiteral::Int(<>),
+    <Float> => PLiteral::Float(<>),
+    <Char> => PLiteral::Char(<>),
+};
+
+MatchBranch: (Id<PPattern>, Id<PExpression>) = {
+    <Pattern> "=>" <Expression> => (<>),
+};
+
+MaybeColonExprGenerics = {
+    ":<" <CommaTrailing<Type>> ">",
+    () => vec![],
+};
+
+ConstructorArguments<Kind>: PConstructorArguments = {
+    <NamedExpressionFields> if Kind != "PreBlock" => <>,
+    <l:@L> "(" <f:CommaTrailing<Expression>> ")" <h:@R> => 
+        PConstructorArguments::Positional(Span(file, l, h), f),
+    <l:@L> () <h:@R> => 
+        PConstructorArguments::Empty(Span(file, l, h)),
+};
+
+NamedExpressionFields: PConstructorArguments = {
+    <l:@L> "{" <fs:CommaTrailing<NamedExpressionField>> "}" <h:@R> =>
+        PConstructorArguments::Named(Span(file, l, h), fs),
+};
+
+NamedExpressionField: (Span, Id<str>, Id<PExpression>) = {
+    <l:@L> <i:Identifier> <h:@R> => 
+        (Span(file, l, h), i, PExpression::identifier(Span(file, l, h), i).intern(ctx)),
+    <l:@L> <i:Identifier> ":" <e:Expression> <h:@R> =>
+        (Span(file, l, h), i, e),
+};
+
+MaybeLabel: Option<Id<str>> = {
+    ":" <Identifier> => Some(<>),
+    () => None,
+};
+
+// --- Pattern --- //
+
+Pattern: Id<PPattern> = {
+    // Ignore pattern, `_`
+    <l:@L> "_" <t:MaybePatternType> <h:@R> => 
+        PPattern::underscore(Span(file, l, h), t).intern(ctx),
+    // A literal pattern (Bool, String, Int, Float, Char)
+    <l:@L> <i:Literal> <t:MaybePatternType> <h:@R> => 
+        PPattern::literal(Span(file, l, h), i, t).intern(ctx),
+    // A variable binding
+    <l:@L> <i:Identifier> <t:MaybePatternType> <h:@R> =>
+        PPattern::identifier(Span(file, l, h), i, t).intern(ctx),
+    // The empty tuple pattern
+    <l:@L> "(" ")" <t:MaybePatternType> <h:@R> => 
+        PPattern::empty(Span(file, l, h), t).intern(ctx),
+    // A non-empty tuple pattern
+    // NOTE: This does not allow `(a)`, due to congruency with tuple construction.
+    <l:@L> "(" <v:(<Pattern> ",")+> <e:Pattern?> ")" <t:MaybePatternType> <h:@R> =>
+        PPattern::tuple(Span(file, l, h), append_maybe(v, e), t).intern(ctx),
+    // Enum constructor tuple patterns
+    <l:@L> <o:ComplexSubtype<"Expr">> <a:PatternConstructorArguments> <t:MaybePatternType> <h:@R> =>
+        PPattern::plain_enum(Span(file, l, h), o, a, t).intern(ctx),
+};
+
+MaybePatternType: Id<PType> = {
+    ":" <Type>,
+    <l:@L> () <h:@R> => PType::infer(Span(file, l, h)).intern(ctx),
+};
+
+PatternConstructorArguments: PPatternConstructorArguments = {
+    <NamedPatternFields>,
+    <PositionalPatternFields>,
+    <l:@L> () <h:@R> => PPatternConstructorArguments::Empty(Span(file, l, h)),
+};
+
+NamedPatternFields: PPatternConstructorArguments = {
+    <l:@L> "{" "..." "}" <h:@R> => 
+        PPatternConstructorArguments::Named(Span(file, l, h), vec![], true),
+    <l:@L> "{" <f:NamedPatternField> "}" <h:@R> => 
+        PPatternConstructorArguments::Named(Span(file, l, h), vec![f], false),
+    <l:@L> "{" <fs:(<NamedPatternField> ",")+> "..." "}" <h:@R> => 
+        PPatternConstructorArguments::Named(Span(file, l, h), fs, true),
+    <l:@L> "{" <fs:(<NamedPatternField> ",")+> <f:NamedPatternField?> "}" <h:@R> => 
+        PPatternConstructorArguments::Named(Span(file, l, h), append_maybe(fs, f), false),
+};
+
+NamedPatternField: (Span, Id<str>, Id<PPattern>) = {
+    <l:@L> <i:Identifier> <h:@R> => {
+        let span = Span(file, l, h);
+        (span, i.clone(), PPattern::identifier(span, i, PType::infer(span).intern(ctx)).intern(ctx))
+    },
+    <l:@L> <i:Identifier> ":" <p:Pattern> <h:@R> =>
+        (Span(file, l, h), i, p),
+};
+
+PositionalPatternFields: PPatternConstructorArguments = {
+    <l:@L> "(" "..." ")" <h:@R> => 
+        PPatternConstructorArguments::Positional(Span(file, l, h), vec![], true),
+    <l:@L> "(" <p:Pattern> ")" <h:@R> => 
+        PPatternConstructorArguments::Positional(Span(file, l, h), vec![p], false),
+    <l:@L> "(" <ps:(<Pattern> ",")+> "..." ")" <h:@R> => 
+        PPatternConstructorArguments::Positional(Span(file, l, h), ps, true),
+    <l:@L> "(" <ps:(<Pattern> ",")+> <p:Pattern?> ")" <h:@R> => 
+        PPatternConstructorArguments::Positional(Span(file, l, h), append_maybe(ps, p), false),
+};

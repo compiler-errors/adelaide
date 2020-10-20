@@ -4,6 +4,7 @@ use codespan_reporting::files::Files;
 
 use crate::{
     file::AFile,
+    parser::{PTraitType, PType, PGlobal, PExpression, PStatement, PPattern, PModule},
     read::{RawFile, RawFileSource},
     util::{AResult, Id},
 };
@@ -30,6 +31,30 @@ pub trait AdelaideContext: salsa::Database {
 
     #[salsa::invoke(crate::lexer::lex_mod)]
     fn lex_mod(&self, key: Id<AFile>) -> AResult<()>;
+
+    #[salsa::invoke(crate::parser::parse_mod)]
+    fn parse_mod(&self, file_id: Id<AFile>) -> AResult<Id<PModule>>;
+
+    #[salsa::interned]
+    fn intern_pmodule(&self, key: Arc<PModule>) -> Id<PModule>;
+
+    #[salsa::interned]
+    fn intern_ptype(&self, key: Arc<PType>) -> Id<PType>;
+
+    #[salsa::interned]
+    fn intern_ptraittype(&self, key: Arc<PTraitType>) -> Id<PTraitType>;
+
+    #[salsa::interned]
+    fn intern_pglobal(&self, key: Arc<PGlobal>) -> Id<PGlobal>;
+
+    #[salsa::interned]
+    fn intern_pexpression(&self, key: Arc<PExpression>) -> Id<PExpression>;
+
+    #[salsa::interned]
+    fn intern_pstatement(&self, key: Arc<PStatement>) -> Id<PStatement>;
+
+    #[salsa::interned]
+    fn intern_ppattern(&self, key: Arc<PPattern>) -> Id<PPattern>;
 }
 
 fn line_starts(ctx: &dyn AdelaideContext, id: Id<AFile>) -> Arc<[usize]> {

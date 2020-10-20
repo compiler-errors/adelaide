@@ -7,7 +7,7 @@ use std::{
 
 pub use token::*;
 
-use crate::{ctx::AdelaideContext, file::AFile, util::{AError, AResult, Id}};
+use crate::{ctx::AdelaideContext, file::AFile, util::{AError, AResult, Id, Intern}};
 
 pub fn lex_mod(ctx: &dyn AdelaideContext, file_id: Id<AFile>) -> AResult<()> {
     if file_id != ctx.mod_tree_root() {
@@ -19,7 +19,7 @@ pub fn lex_mod(ctx: &dyn AdelaideContext, file_id: Id<AFile>) -> AResult<()> {
         );
 
         let raw_mod = ctx.read_file(file_id)?;
-        let lexer = Lexer::new(file_id, &raw_mod.contents);
+        let lexer = Lexer::new(ctx, file_id, &raw_mod.contents);
 
         for tok in lexer {
             print!("{}  ", tok?.1);
@@ -53,6 +53,8 @@ impl Span {
 pub struct SpanToken(pub Span, pub Token);
 
 pub struct Lexer<'input> {
+    ctx: &'input dyn AdelaideContext,
+
     file: Id<AFile>,
     stream: Chars<'input>,
 
@@ -70,8 +72,9 @@ pub enum LexStringChar {
 }
 
 impl<'input> Lexer<'input> {
-    pub fn new(file: Id<AFile>, input: &'input str) -> Lexer<'input> {
+    pub fn new(ctx: &'input dyn AdelaideContext, file: Id<AFile>, input: &'input str) -> Lexer<'input> {
         let mut lex = Lexer {
+            ctx, 
             file,
             stream: input.chars(),
             current_pos: 0,
@@ -372,11 +375,11 @@ impl<'input> Lexer<'input> {
                     string.push(c);
                 },
                 LexStringChar::QuoteEnd => {
-                    return Ok(Token::String(string));
+                    return Ok(Token::String(string.intern(self.ctx)));
                 },
                 LexStringChar::InterpolateBegin => {
                     self.interp_parenthetical.push(0);
-                    return Ok(Token::InterpolateBegin(string));
+                    return Ok(Token::InterpolateBegin(string.intern(self.ctx)));
                 },
             }
         }
@@ -393,10 +396,10 @@ impl<'input> Lexer<'input> {
                 },
                 LexStringChar::QuoteEnd => {
                     self.interp_parenthetical.pop();
-                    return Ok(Token::InterpolateEnd(string));
+                    return Ok(Token::InterpolateEnd(string.intern(self.ctx)));
                 },
                 LexStringChar::InterpolateBegin => {
-                    return Ok(Token::InterpolateContinue(string));
+                    return Ok(Token::InterpolateContinue(string.intern(self.ctx)));
                 },
             }
         }
@@ -505,7 +508,7 @@ impl<'input> Lexer<'input> {
             self.bump(1);
         }
 
-        Ok(Token::InstructionLiteral(string))
+        Ok(Token::InstructionLiteral(string.intern(self.ctx)))
     }
 
     /// Scans a numeric literal, consuming it and converting it to a token in
@@ -569,7 +572,7 @@ impl<'input> Lexer<'input> {
             }
 
             debug!("Scanned Float `{}`", string);
-            Ok(Token::FloatLiteral(string))
+            Ok(Token::FloatLiteral(string.intern(self.ctx)))
         }
         /* else if self.current_char == 'u' {
             self.bump(1);
@@ -577,7 +580,7 @@ impl<'input> Lexer<'input> {
         } */
         else {
             debug!("Scanned Int `{}`", string);
-            Ok(Token::IntLiteral(string))
+            Ok(Token::IntLiteral(string.intern(self.ctx)))
         }
     }
 
@@ -645,8 +648,8 @@ impl<'input> Lexer<'input> {
             "Dyn" => Token::DynTrait,
 
             _ => match string.chars().nth(0).unwrap() {
-                'A'..='Z' => Token::TypeName(string),
-                'a'..='z' => Token::Identifier(string),
+                'A'..='Z' => Token::TypeName(string.intern(self.ctx)),
+                'a'..='z' => Token::Identifier(string.intern(self.ctx)),
                 '_' =>
                     return Err(AError::LexerError(
                         Span(self.file, start, self.current_pos),

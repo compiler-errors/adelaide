@@ -1,9 +1,9 @@
-#![deny(unused_must_use, unused_variables)]
-
 #[macro_use]
 extern crate maplit;
 #[macro_use]
 extern crate log;
+#[macro_use]
+extern crate lalrpop_util;
 #[macro_use]
 extern crate r#proc;
 extern crate self as adelaide;
@@ -13,6 +13,7 @@ mod file;
 mod read;
 mod util;
 mod lexer;
+mod parser;
 
 use codespan_reporting::term::termcolor::{ColorChoice, StandardStream};
 use clap::Clap;
@@ -77,8 +78,8 @@ fn try_main(ctx: &mut AdelaideDatabase) -> AResult<()> {
             ctx.lex_mod(root)?;
         },
         Mode::Parse => {
-            //let m = ctx.parse_mod(root)?;
-            //println!("{:#?}", Pretty(m, ctx))
+            let m = ctx.parse_mod(root)?;
+            println!("{:#?}", Pretty(m, ctx))
         },
     }
 
