@@ -46,21 +46,11 @@ fn map_parse_error(file_id: Id<AFile>, error: ParseError<usize, Token, AError>) 
             expected,
         } => AError::ParseError(
             Span(file_id, l, h),
-            format!(
-                "Unexpected token {}, expected {}",
-                t,
-                CommaSep(expected)
-            ),
+            format!("Unexpected token {}, expected {}", t, CommaSep(expected)),
         ),
-        ParseError::UnrecognizedEOF {
-            location,
-            expected,
-        } => AError::ParseError(
+        ParseError::UnrecognizedEOF { location, expected } => AError::ParseError(
             Span(file_id, location.saturating_sub(1), location),
-            format!(
-                "Unexpected EOF, expected {}",
-                CommaSep(expected)
-            ),
+            format!("Unexpected EOF, expected {}", CommaSep(expected)),
         ),
         _ => todo!(),
     }

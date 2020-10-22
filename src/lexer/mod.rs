@@ -7,12 +7,16 @@ use std::{
 
 pub use token::*;
 
-use crate::{ctx::AdelaideContext, file::AFile, util::{AError, AResult, Id, Intern}};
+use crate::{
+    ctx::AdelaideContext,
+    file::AFile,
+    util::{AError, AResult, Id, Intern},
+};
 
 pub fn lex_mod(ctx: &dyn AdelaideContext, file_id: Id<AFile>) -> AResult<()> {
     if file_id != ctx.mod_tree_root() {
         let file = file_id.lookup(ctx);
-        
+
         println!(
             "Reading module {}",
             itertools::join(file.mod_path.iter(), ":")
@@ -72,9 +76,13 @@ pub enum LexStringChar {
 }
 
 impl<'input> Lexer<'input> {
-    pub fn new(ctx: &'input dyn AdelaideContext, file: Id<AFile>, input: &'input str) -> Lexer<'input> {
+    pub fn new(
+        ctx: &'input dyn AdelaideContext,
+        file: Id<AFile>,
+        input: &'input str,
+    ) -> Lexer<'input> {
         let mut lex = Lexer {
-            ctx, 
+            ctx,
             file,
             stream: input.chars(),
             current_pos: 0,
@@ -626,6 +634,7 @@ impl<'input> Lexer<'input> {
             "false" => Token::False,
 
             "object" => Token::Object,
+            "struct" => Token::Struct,
             "type" => Token::Type,
             "self" => Token::SelfRef,
             "allocate" => Token::Allocate,

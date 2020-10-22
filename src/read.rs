@@ -1,6 +1,10 @@
 use std::sync::Arc;
 
-use crate::{ctx::AdelaideContext, file::AFile, util::AError, util::AResult, util::Id};
+use crate::{
+    ctx::AdelaideContext,
+    file::AFile,
+    util::{AError, AResult, Id},
+};
 
 #[derive(Debug, Hash, Eq, PartialEq)]
 pub struct RawFile {
@@ -21,7 +25,10 @@ impl AsRef<str> for RawFileSource {
     }
 }
 
-pub fn read_file<'ctx>(ctx: &'ctx dyn AdelaideContext, file_id: Id<AFile>) -> AResult<Arc<RawFile>> {
+pub fn read_file<'ctx>(
+    ctx: &'ctx dyn AdelaideContext,
+    file_id: Id<AFile>,
+) -> AResult<Arc<RawFile>> {
     let file = file_id.lookup(ctx);
 
     let contents = if let Some(path) = &file.path {

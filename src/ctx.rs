@@ -4,7 +4,7 @@ use codespan_reporting::files::Files;
 
 use crate::{
     file::AFile,
-    parser::{PTraitType, PType, PGlobal, PExpression, PStatement, PPattern, PModule},
+    parser::{PExpression, PGlobal, PModule, PPattern, PStatement, PTraitType, PType},
     read::{RawFile, RawFileSource},
     util::{AResult, Id},
 };
@@ -26,11 +26,15 @@ pub trait AdelaideContext: salsa::Database {
     #[salsa::interned]
     fn intern_file(&self, data: Arc<AFile>) -> Id<AFile>;
 
+    // ------ LEXER ------ //
+
     #[salsa::invoke(crate::read::read_file)]
     fn read_file(&self, key: Id<AFile>) -> AResult<Arc<RawFile>>;
 
     #[salsa::invoke(crate::lexer::lex_mod)]
     fn lex_mod(&self, key: Id<AFile>) -> AResult<()>;
+
+    // ------ PARSER ------ //
 
     #[salsa::invoke(crate::parser::parse_mod)]
     fn parse_mod(&self, file_id: Id<AFile>) -> AResult<Id<PModule>>;
@@ -55,6 +59,18 @@ pub trait AdelaideContext: salsa::Database {
 
     #[salsa::interned]
     fn intern_ppattern(&self, key: Arc<PPattern>) -> Id<PPattern>;
+
+    // ------ LOWERING ------ //
+
+    // ...
+
+    // ------ TYPECHECKER ------ //
+
+    // ...
+
+    // ------ MONOMORPHIZATION ------ //
+
+    // ...
 }
 
 fn line_starts(ctx: &dyn AdelaideContext, id: Id<AFile>) -> Arc<[usize]> {

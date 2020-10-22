@@ -69,7 +69,7 @@ macro_rules! simple_pretty {
     }
 }
 
-simple_pretty!(bool, u64, str);
+simple_pretty!(bool, u64, char, str);
 simple_pretty!(std::path::PathBuf);
 simple_pretty!(crate::lexer::Span, crate::file::ModuleName);
 

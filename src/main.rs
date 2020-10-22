@@ -10,14 +10,14 @@ extern crate self as adelaide;
 
 mod ctx;
 mod file;
-mod read;
-mod util;
 mod lexer;
 mod parser;
+mod read;
+mod util;
 
-use codespan_reporting::term::termcolor::{ColorChoice, StandardStream};
 use clap::Clap;
-use ctx::{AdelaideDatabase, AdelaideContext};
+use codespan_reporting::term::termcolor::{ColorChoice, StandardStream};
+use ctx::{AdelaideContext, AdelaideDatabase};
 use file::initialize_from_path_arguments;
 use util::{AResult, Pretty};
 
@@ -54,11 +54,10 @@ fn main() {
     let mut ctx = AdelaideDatabase::default();
 
     if let Err(err) = try_main(&mut ctx) {
-        let diagnostic = err.into();
         let writer = StandardStream::stderr(ColorChoice::Always);
         let config = codespan_reporting::term::Config::default();
 
-        codespan_reporting::term::emit(&mut writer.lock(), &config, &ctx, &diagnostic).unwrap();
+        codespan_reporting::term::emit(&mut writer.lock(), &config, &ctx, &err.into()).unwrap();
     }
 }
 
@@ -68,8 +67,13 @@ fn try_main(ctx: &mut AdelaideDatabase) -> AResult<()> {
         input,
         verbose,
     } = Cmd::parse();
+
+    // Init logging based on -vvv flags
     init_logging(verbose);
+
+    // Initialize the module tree from paths provided
     initialize_from_path_arguments(ctx, input)?;
+
     let root = ctx.mod_tree_root();
 
     match mode {
@@ -95,7 +99,11 @@ fn init_logging(verbose: u8) {
             _ => "trace",
         }));
 
+    // Let's continue to filter out salsa internal logging.
+    // From my point of view, I trust that salsa is working correctly. If I
+    // eventually hit consistency or correctness bugs in Salsa, I'll add a
+    // separate flag or just do it with the env variable.
     builder.filter(Some("salsa"), log::LevelFilter::Warn);
+
     builder.init();
 }
-
