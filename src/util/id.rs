@@ -8,6 +8,10 @@ impl<T: Lookup + ?Sized> Id<T> {
     pub fn lookup(self, ctx: &dyn AdelaideContext) -> Arc<T> {
         T::lookup(self, ctx)
     }
+
+    pub fn id(self) -> u32 {
+        self.0.into()
+    }
 }
 
 impl<T: ?Sized> salsa::InternKey for Id<T> {

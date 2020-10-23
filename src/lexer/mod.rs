@@ -54,6 +54,12 @@ impl Span {
     }
 }
 
+impl crate::util::PrettyPrint for Span {
+    fn fmt(&self, f: &mut std::fmt::Formatter, _: &dyn AdelaideContext) -> std::fmt::Result {
+        write!(f, "Span({}, {}, {})", self.0.id(), self.1, self.2)
+    }
+}
+
 pub struct SpanToken(pub Span, pub Token);
 
 pub struct Lexer<'input> {

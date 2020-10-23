@@ -26,7 +26,11 @@ impl<T: PrettyPrint> PrettyPrint for &'_ T {
 impl<T: PrettyPrint> PrettyPrint for Option<T> {
     fn fmt(&self, f: &mut Formatter, ctx: &dyn AdelaideContext) -> Result {
         match self {
-            Some(t) => write!(f, "Some({:?})", Pretty(t, ctx)),
+            Some(t) => {
+                let mut d = f.debug_tuple("Some");
+                d.field(&Pretty(t, ctx));
+                d.finish()
+            },
             None => write!(f, "None"),
         }
     }
@@ -83,7 +87,7 @@ macro_rules! simple_pretty {
 
 simple_pretty!(bool, u64, char, str);
 simple_pretty!(std::path::PathBuf);
-simple_pretty!(crate::lexer::Span, crate::file::ModuleName);
+simple_pretty!(crate::file::ModuleName);
 
 macro_rules! tuple_pretty {
     ($($ty:ident),*; $($idx:tt),*) => {
