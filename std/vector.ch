@@ -36,9 +36,9 @@ impl<T> Self for Vector<T> {
       self:array[self:size] = todo().
 
       //self:try_downsize().
-      Option::Some(elem)
+      Some(elem)
     } else {
-      Option::None
+      None
     }
   }.
 
@@ -70,38 +70,36 @@ impl<T> Iterable for Vector<T> {
   type Item = T.
 
   fn iterator(self) -> VectorIterator<T> = {
-    VectorIterator::Iterator { vector: self, idx: 0 }
+    VectorIterator { vector: self, idx: 0 }
   }.
 }
 
-enum VectorIterator<T> {
-  Iterator {
-    vector: Vector<T>,
-    idx: Int,
-  },
+struct VectorIterator<T> {
+  vector: Vector<T>,
+  idx: Int,
 }
 
 impl<T> Iterator for VectorIterator<T> {
   type Item = T.
 
   fn next(self) -> (Option<T>, VectorIterator<T>) = {
-    let VectorIterator::Iterator { vector, idx } = self.
+    let VectorIterator { vector, idx } = self.
 
     if idx >= vector:size {
-      (Option::None, VectorIterator::Iterator { vector, idx })
+      (None, VectorIterator { vector, idx })
     } else {
-      (Option::Some(vector:array[idx]), VectorIterator::Iterator { vector, idx: idx + 1 })
+      (Some(vector:array[idx]), VectorIterator { vector, idx: idx + 1 })
     }
   }.
 
   fn has_next(self) -> Bool = {
-    let VectorIterator::Iterator { vector, idx } = self.
+    let VectorIterator { vector, idx } = self.
 
     idx < vector:size
   }.
 
   fn size_hint(self) -> Int = {
-    let VectorIterator::Iterator { vector, idx } = self.
+    let VectorIterator { vector, idx } = self.
 
     vector:size - idx
   }.

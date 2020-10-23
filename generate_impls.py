@@ -33,26 +33,24 @@ impl{angled_generic_tys} Hash for {tuple_ty}{where_hash} {{
   }}.
 }}
 
-enum Join{n}{join_generics} {{
-  Variant{join_variant},
-}}
+struct Join{n}{join_generics}{join_variant}.
 
 impl{join_generics} Join for {awaitable_tuple_ty}{where_poll} {{
   type Result = {tuple_ty}.
   type Joined = Join{n}{join_generics}.
 
   fn join(self) -> Join{n}{join_generics} =
-    Join{n}::Variant{join_variant_lefts}.
+    Join{n}{join_variant_lefts}.
 }}
 
 impl{join_generics} Poll for Join{n}{join_generics}{where_poll} {{
   type Result = {tuple_ty}.
 
   fn poll(self) -> (PollState<{tuple_ty}>, Self) = match self {{
-    Join{n}::Variant{join_variant_variables} => {{
+    Join{n}{join_variant_variables} => {{
       let success = true.
 {join_variant_process}
-      let new_self = Join{n}::Variant{join_variant_variables}.
+      let new_self = Join{n}{join_variant_variables}.
 
       if success {{
         (PollState::Complete({join_complete_tuple}), new_self)

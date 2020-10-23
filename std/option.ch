@@ -6,14 +6,14 @@ enum Option<T> {
 impl<T> Self for Option<T> {
   fn map<F, O>(self, f: F) -> Option<O> where F: Fn(T) -> O = {
     match self {
-      Option::Some(t) => Option::Some(f(t)),
-      Option::None => Option::None,
+      Some(t) => Some(f(t)),
+      None => None,
     }
   }.
 
   fn expect(self, s: String) -> T = {
     match self {
-      Option::Some(v) => v,
+      Some(v) => v,
       _ => panic(s),
     }
   }.
@@ -24,22 +24,22 @@ impl<T> Self for Option<T> {
 
   fn unwrap_or(self, other: T) -> T = {
     match self {
-      Option::Some(v) => v,
+      Some(v) => v,
       _ => other,
     }
   }.
 
   fn unwrap_or_else<F>(self, otherwise: F) -> T where F: Fn() -> T = {
     match self {
-      Option::Some(v) => v,
+      Some(v) => v,
       _ => otherwise(),
     }
   }.
 
   fn is_some(self) -> Bool = {
     match self {
-      Option::Some(_) => true,
-      Option::None => false,
+      Some(_) => true,
+      None => false,
     }
   }.
 
@@ -51,8 +51,8 @@ impl<T> Self for Option<T> {
 impl<T> Into<String> for Option<T> where T: Into<String> {
   fn into(self) -> String = {
     match self {
-      Option::Some(s) => "Some(\(s))",
-      Option::None => "None",
+      Some(s) => "Some(\(s))",
+      None => "None",
     }
   }.
 }

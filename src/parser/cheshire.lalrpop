@@ -164,6 +164,8 @@ Use: Id<PUse> = {
 UseElement: Vec<PUseElement> = {
     <l:@L> <i:Identifier> <h:@R> "::" <u:UseElement> =>
         PUseElement::in_mod(Span(file, l, h), i, u),
+    <l:@L> <i:TypeName> <h:@R> "::" <u:UseElement> =>
+        PUseElement::in_mod(Span(file, l, h), i, u), // Ok, misnomer...
     <l:@L> <i:Identifier> <h:@R> <r:MaybeRename<Identifier>> =>
         PUseElement::plain_use(Span(file, l, h), i, r),
     <l:@L> <t:TypeName> <h:@R> <r:MaybeRename<TypeName>> =>
@@ -238,7 +240,7 @@ Object: Id<PObject> = {
 ObjectMembers: PObjectMembers = {
     <l:@L> "{" <m:CommaTrailingOrEmpty<NamedObjectMember>> "}" <h:@R> =>
         PObjectMembers::Named(Span(file, l, h), m),
-    <l:@L> "(" <m:CommaTrailingOrEmpty<Type>> ")" <h:@R> =>
+    <l:@L> "(" <m:CommaTrailingOrEmpty<Type>> ")" "." <h:@R> =>
         PObjectMembers::Positional(Span(file, l, h), m),
     <l:@L> "." <h:@R> =>
         PObjectMembers::Empty(Span(file, l, h)),

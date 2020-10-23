@@ -36,12 +36,12 @@ impl Iterator for RangeIterator {
     match self {
       RangeIterator::Finite(a, b) =>
         if a < b {
-          (Option::Some(a), RangeIterator::Finite(a + 1, b))
+          (Some(a), RangeIterator::Finite(a + 1, b))
         } else {
-          (Option::None, self)
+          (None, self)
         },
       RangeIterator::Infinite(a) =>
-        (Option::Some(a), RangeIterator::Infinite(a + 1)),
+        (Some(a), RangeIterator::Infinite(a + 1)),
     }
   }.
 
@@ -61,10 +61,10 @@ impl Iterator for RangeIterator {
 }
 
 impl<It> Self for It where It: Iterator {
-  fn map<F>(self, fun: F) -> Map<It, F> = Map::Iterator { fun, iterator: self }.
-  fn enumerate(self) -> Enumerate<It> = Enumerate::Iterator { idx: 0, iterator: self }.
-  fn limit(self, limit: Int) -> Limit<It> = Limit::Iterator { remaining: limit, iterator: self }.
-  fn zip<It2>(self, other: It2) -> Zip<It, It2> = Zip::Iterator(self, other).
+  fn map<F>(self, fun: F) -> Map<It, F> = Map { fun, iterator: self }.
+  fn enumerate(self) -> Enumerate<It> = Enumerate { idx: 0, iterator: self }.
+  fn limit(self, limit: Int) -> Limit<It> = Limit { remaining: limit, iterator: self }.
+  fn zip<It2>(self, other: It2) -> Zip<It, It2> = Zip(self, other).
 
   fn collect<C>(self) -> C where C: FromIterator<<Self as Iterator>::Item> = {
     <C>::from_iterator(self)
@@ -87,11 +87,9 @@ impl<T> Self for T where T: Iterator, <Self as Iterator>::Item: Default + Add<<S
       |a, b| a + b).
 }
 
-enum Map<It, F> {
-  Iterator {
-    iterator: It,
-    fun: F,
-  },
+struct Map<It, F> {
+  iterator: It,
+  fun: F,
 }
 
 impl<It, F, O> Iterator for Map<It, F> where
@@ -100,80 +98,76 @@ impl<It, F, O> Iterator for Map<It, F> where
   type Item = O.
 
   fn next(self) -> (Option<O>, Self) = {
-    let Map::Iterator { iterator, fun } = self.
+    let Map { iterator, fun } = self.
 
     let (next, iterator) = iterator:next().
 
-    (next:map(fun), Map::Iterator { iterator, fun })
+    (next:map(fun), Map { iterator, fun })
   }.
 
   fn has_next(self) -> Bool = {
-    let Map::Iterator { iterator, ... } = self.
+    let Map { iterator, ... } = self.
     iterator:has_next()
   }.
 
   fn size_hint(self) -> Int = {
-    let Map::Iterator { iterator, ... } = self.
+    let Map { iterator, ... } = self.
     iterator:size_hint()
   }.
 }
 
-enum Enumerate<It> {
-  Iterator {
-    iterator: It,
-    idx: Int,
-  },
+struct Enumerate<It> {
+  iterator: It,
+  idx: Int,
 }
 
 impl<It> Iterator for Enumerate<It> where It: Iterator {
   type Item = (Int, <It as Iterator>::Item).
 
   fn next(self) -> (Option<(Int, <It as Iterator>::Item)>, Self) = {
-    let Enumerate::Iterator { iterator, idx } = self.
+    let Enumerate { iterator, idx } = self.
 
     let (next, iterator) = iterator:next().
 
     match next {
-      Option::Some(next) => (Option::Some((idx, next)), Enumerate::Iterator { iterator, idx: idx + 1 }),
-      Option::None => (Option::None, Enumerate::Iterator { iterator, idx })
+      Some(next) => (Some((idx, next)), Enumerate { iterator, idx: idx + 1 }),
+      None => (None, Enumerate { iterator, idx })
     }
   }.
 
   fn has_next(self) -> Bool = {
-    let Enumerate::Iterator { iterator, ... } = self.
+    let Enumerate { iterator, ... } = self.
     iterator:has_next()
   }.
 
   fn size_hint(self) -> Int = {
-    let Enumerate::Iterator { iterator, ... } = self.
+    let Enumerate { iterator, ... } = self.
     iterator:size_hint()
   }.
 }
 
-enum Limit<It> {
-  Iterator {
-    iterator: It,
-    remaining: Int,
-  },
+struct Limit<It> {
+  iterator: It,
+  remaining: Int,
 }
 
 impl<It> Iterator for Limit<It> where It: Iterator {
   type Item = <It as Iterator>::Item.
 
   fn next(self) -> (Option<<Self as Iterator>::Item>, Self) = {
-    let Limit::Iterator { iterator, remaining } = self.
+    let Limit { iterator, remaining } = self.
 
     if remaining <= 0 {
-      (Option::None, self)
+      (None, self)
     } else {
       let (next, iterator) = iterator:next().
 
-      (next, Limit::Iterator { iterator, remaining: remaining - 1 })
+      (next, Limit { iterator, remaining: remaining - 1 })
     }
   }.
 
   fn has_next(self) -> Bool = {
-    let Limit::Iterator { iterator, remaining } = self.
+    let Limit { iterator, remaining } = self.
 
     if remaining <= 0 {
       false
@@ -183,7 +177,7 @@ impl<It> Iterator for Limit<It> where It: Iterator {
   }.
 
   fn size_hint(self) -> Int = {
-    let Limit::Iterator { iterator, remaining } = self.
+    let Limit { iterator, remaining } = self.
     let hint = iterator:size_hint().
 
     if hint < 0 {
@@ -194,33 +188,31 @@ impl<It> Iterator for Limit<It> where It: Iterator {
   }.
 }
 
-enum Zip<I1, I2> {
-  Iterator(I1, I2),
-}
+struct Zip<I1, I2>(I1, I2).
 
 impl<I1, I2> Iterator for Zip<I1, I2> where I1: Iterator, I2:Iterator {
   type Item = (<I1 as Iterator>::Item, <I2 as Iterator>::Item).
 
   fn next(self) -> (Option<<Self as Iterator>::Item>, Self) = {
-    let Zip::Iterator(i1, i2) = self.
+    let Zip(i1, i2) = self.
 
     if i1:has_next() &? i2:has_next() {
       let (n1, i1) = i1:next().
       let (n2, i2) = i2:next().
 
-      (Option::Some((n1:unwrap(), n2:unwrap())), Zip::Iterator(i1, i2))
+      (Some((n1:unwrap(), n2:unwrap())), Zip(i1, i2))
     } else {
-      (Option::None, self)
+      (None, self)
     }
   }.
 
   fn has_next(self) -> Bool = {
-    let Zip::Iterator(i1, i2) = self.
+    let Zip(i1, i2) = self.
     i1:has_next() &? i2:has_next()
   }.
 
   fn size_hint(self) -> Int = {
-    let Zip::Iterator(i1, i2) = self.
+    let Zip(i1, i2) = self.
     match (i1:size_hint(), i2:size_hint()) {
       (-1, -1) => -1,
       (-1, b)  => b,
@@ -235,39 +227,37 @@ impl<T> Iterable for [T] {
   type Item = T.
 
   fn iterator(self) -> ArrayIterator<T> = {
-    ArrayIterator::Iterator { array: self, idx: 0 }
+    ArrayIterator { array: self, idx: 0 }
   }.
 }
 
-enum ArrayIterator<T> {
-  Iterator {
-    array: [T],
-    idx: Int,
-  },
+struct ArrayIterator<T> {
+  array: [T],
+  idx: Int,
 }
 
 impl<T> Iterator for ArrayIterator<T> {
   type Item = T.
 
   fn next(self) -> (Option<T>, Self) = {
-    let ArrayIterator::Iterator { array, idx } = self.
+    let ArrayIterator { array, idx } = self.
     let len = array:len().
 
     if idx >= len {
-      (Option::None, self)
+      (None, self)
     } else {
-      (Option::Some(array[idx]), ArrayIterator::Iterator { array, idx: idx + 1 })
+      (Some(array[idx]), ArrayIterator { array, idx: idx + 1 })
     }
   }.
 
   fn has_next(self) -> Bool = {
-    let ArrayIterator::Iterator { array, idx } = self.
+    let ArrayIterator { array, idx } = self.
 
     idx < array:len()
   }.
 
   fn size_hint(self) -> Int = {
-    let ArrayIterator::Iterator { array, idx } = self.
+    let ArrayIterator { array, idx } = self.
 
     array:len() - idx
   }.
@@ -297,11 +287,9 @@ impl<I> FromIterator<I> for [I] {
   }.
 }
 
-enum StringIterator {
-  Iterator {
-    str: String,
-    idx: Int,
-  },
+struct StringIterator {
+  str: String,
+  idx: Int,
 }
 
 impl Iterable for String {
@@ -309,7 +297,7 @@ impl Iterable for String {
   type Item = Char.
 
   fn iterator(self) -> StringIterator = {
-    StringIterator::Iterator { str: self, idx: 0 }
+    StringIterator { str: self, idx: 0 }
   }.
 }
 
@@ -317,23 +305,23 @@ impl Iterator for StringIterator {
   type Item = Char.
 
   fn next(self) -> (Option<Char>, Self) = {
-    let StringIterator::Iterator { str, idx } = self.
+    let StringIterator { str, idx } = self.
 
     if idx >= str:len() {
-      (Option::None, self)
+      (None, self)
     } else {
-      (Option::Some(str[idx]), StringIterator::Iterator { str, idx: idx + 1 })
+      (Some(str[idx]), StringIterator { str, idx: idx + 1 })
     }
   }.
 
   fn has_next(self) -> Bool = {
-    let StringIterator::Iterator { str, idx } = self.
+    let StringIterator { str, idx } = self.
 
     idx < str:len()
   }.
 
   fn size_hint(self) -> Int = {
-    let StringIterator::Iterator { str, idx } = self.
+    let StringIterator { str, idx } = self.
 
     str:len() - idx
   }.

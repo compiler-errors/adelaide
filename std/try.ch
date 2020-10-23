@@ -36,11 +36,11 @@ impl<T> IntoResult for Option<T> {
   type ErrorType = ().
 
   fn into_result(self) -> Result<T, ()> = match self {
-    Option::Some(t) => Result::Ok(t),
-    Option::None => Result::Error(()),
+    Some(t) => Result::Ok(t),
+    None => Result::Error(()),
   }.
 
-  fn from_ok(t: T) -> Option<T> = Option::Some(t).
-  fn from_error(e: ()) -> Option<T> = Option::None.
+  fn from_ok(t: T) -> Option<T> = Some(t).
+  fn from_error(e: ()) -> Option<T> = None.
 }
 

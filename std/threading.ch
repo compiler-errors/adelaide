@@ -25,7 +25,7 @@ impl Self for Thread {
     }
 
     while true {
-      if let Option::Some(value) = self:completed {
+      if let Some(value) = self:completed {
         break value.
       } else {
         todo()

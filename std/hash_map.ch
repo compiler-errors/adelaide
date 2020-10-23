@@ -30,12 +30,12 @@ impl<K, V> Self for HashMap<K, V> where K: Equals<K> + Hash {
     for (maybe_hash, maybe_key, maybe_value) in self:bucket_from_hash(hash):entries {
       if hash == maybe_hash {
         if key == maybe_key {
-          return Option::Some(maybe_value).
+          return Some(maybe_value).
         }
       }
     }
 
-    Option::None
+    None
   }.
 
   fn remove(self, key: K) -> Option<V> = {
@@ -45,26 +45,26 @@ impl<K, V> Self for HashMap<K, V> where K: Equals<K> + Hash {
     let next_link = bucket:entries:root.
     while true {
       match next_link {
-        Option::Some(link) => {
+        Some(link) => {
           let (old_hash, old_key, old_value) = link:get().
 
           if hash == old_hash {
             if key == old_key {
               link:unlink().
               self:size = self:size - 1.
-              return Option::Some(old_value).
+              return Some(old_value).
             }
           }
 
           next_link = link:next.
         },
-        Option::None => {
+        None => {
           break.
         },
       }
     }
 
-    Option::None
+    None
   }.
 
   fn put(self, key: K, value: V) -> Option<V> = {
@@ -74,19 +74,19 @@ impl<K, V> Self for HashMap<K, V> where K: Equals<K> + Hash {
     let next_link = bucket:entries:root.
     while true {
       match next_link {
-        Option::Some(link) => {
+        Some(link) => {
           let (old_hash, old_key, old_value) = link:get().
 
           if hash == old_hash {
             if key == old_key {
               link:set((hash, key, value)).
-              return Option::Some(old_value).
+              return Some(old_value).
             }
           }
 
           next_link = link:next.
         },
-        Option::None => {
+        None => {
           break.
         },
       }
@@ -96,7 +96,7 @@ impl<K, V> Self for HashMap<K, V> where K: Equals<K> + Hash {
     bucket:entries:push_back((hash, key, value)).
 
     self:try_grow().
-    Option::None
+    None
   }.
 
   fn try_grow(self) = {
@@ -123,8 +123,8 @@ impl<K, V> Deref<K> for HashMap<K, V> where K: Equals<K> + Hash {
 
   fn deref(self, idx: K) -> V = {
     match self:get(idx) {
-      Option::Some(v) => v,
-      Option::None => panic("No such index"),
+      Some(v) => v,
+      None => panic("No such index"),
     }
   }.
 }
@@ -153,12 +153,10 @@ impl<K, V> Iterable for HashMap<K, V> {
   }.
 }
 
-enum HashMapIterator<K, V> {
-  Iterator {
+struct HashMapIterator<K, V> {
     size_hint: Int,
     buckets: ArrayIterator<Bucket<K, V>>,
     links: ListIterator<(Int, K, V)>,
-  },
 }
 
 impl<K, V> Iterator for HashMapIterator<K, V> {
@@ -170,7 +168,7 @@ impl<K, V> Iterator for HashMapIterator<K, V> {
     if links:has_next() {
       let (next_link, links) = links:next().
       let (_, k, v) = next_link:unwrap().
-      return (Option::Some((k, v)), HashMapIterator::Iterator { size_hint: size_hint - 1, buckets, links }).
+      return (Some((k, v)), HashMapIterator::Iterator { size_hint: size_hint - 1, buckets, links }).
     }
 
     let ArrayIterator::Iterator { idx: buckets_idx, ... } = buckets.
@@ -185,12 +183,12 @@ impl<K, V> Iterator for HashMapIterator<K, V> {
         let (next_link, links) = next_bucket:entries:iterator():next().
         let (_, k, v) = next_link:unwrap().
 
-        return (Option::Some((k, v)), HashMapIterator::Iterator { size_hint: size_hint - 1, buckets, links }).
+        return (Some((k, v)), HashMapIterator::Iterator { size_hint: size_hint - 1, buckets, links }).
       }
     }
 
     assert size_hint == 0.
-    (Option::None, HashMapIterator::Iterator { size_hint, buckets, links })
+    (None, HashMapIterator::Iterator { size_hint, buckets, links })
   }.
 
   fn has_next(self) -> Bool = {

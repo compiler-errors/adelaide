@@ -1,7 +1,7 @@
 pub use any::*.
 pub use operators::*.
 pub use iterator::*.
-pub use option::*.
+pub use option::{*, Option::{None, Some}}.
 pub use try::*.
 pub use vector::*.
 pub use list::*.
