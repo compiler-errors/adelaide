@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     fmt::{Debug, Formatter, Result},
 };
 
@@ -33,6 +33,18 @@ impl<T: PrettyPrint> PrettyPrint for Option<T> {
 }
 
 impl<T: PrettyPrint> PrettyPrint for Vec<T> {
+    fn fmt(&self, f: &mut Formatter, ctx: &dyn AdelaideContext) -> Result {
+        let mut h = f.debug_list();
+
+        for i in self {
+            h.entry(&Pretty(i, ctx));
+        }
+
+        h.finish()
+    }
+}
+
+impl<T: PrettyPrint> PrettyPrint for VecDeque<T> {
     fn fmt(&self, f: &mut Formatter, ctx: &dyn AdelaideContext) -> Result {
         let mut h = f.debug_list();
 

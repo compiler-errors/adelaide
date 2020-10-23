@@ -1,5 +1,3 @@
-use crate::lexer::Token;
-
 pub fn append<T>(mut t: Vec<T>, e: T) -> Vec<T> {
     t.push(e);
     t

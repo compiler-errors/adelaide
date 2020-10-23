@@ -143,14 +143,189 @@ TypeNamePath: Vec<Id<str>> = {
 pub Module = <Item*>;
 
 Item: PItem = {
-    <Use> => todo!(),
+    <Use> => PItem::Use(<>),
     <Global> => PItem::Global(<>),
-    <Function> => todo!(),
-    <Object> => todo!(),
-    <Enum> => todo!(),
-    <Trait> => todo!(),
-    <Impl> => todo!(),
-}
+    <Function> => PItem::Function(<>),
+    <Object> => PItem::Object(<>),
+    <Enum> => PItem::Enum(<>),
+    <Trait> => PItem::Trait(<>),
+    <Impl> => PItem::Impl(<>),
+};
+
+// --- Use --- //
+
+Use: Id<PUse> = {
+    <p:"pub"?> <l:@L> "use" <h:@R> "::" <u:UseElement> "." =>
+        PUse::new(Span(file, l, h), true, u).intern(ctx),
+    <p:"pub"?> <l:@L> "use" <h:@R> <u:UseElement> "." =>
+        PUse::new(Span(file, l, h), false, u).intern(ctx),
+};
+
+UseElement: Vec<PUseElement> = {
+    <l:@L> <i:Identifier> <h:@R> "::" <u:UseElement> =>
+        PUseElement::in_mod(Span(file, l, h), i, u),
+    <l:@L> <i:Identifier> <h:@R> <r:MaybeRename<Identifier>> =>
+        PUseElement::plain_use(Span(file, l, h), i, r),
+    <l:@L> <t:TypeName> <h:@R> <r:MaybeRename<TypeName>> =>
+        PUseElement::plain_use(Span(file, l, h), t, r),
+    <l:@L> "self" <h:@R> <r:MaybeRename<TypeName>> =>
+        PUseElement::self_use(Span(file, l, h), r),
+    <l:@L> "*" <h:@R> =>
+        PUseElement::use_all(Span(file, l, h)),
+    "{" <e:CommaTrailing<UseElement>> "}" => 
+        e.into_iter().flatten().collect(),
+};
+
+MaybeRename<T>: Option<(Span, T)> = {
+    "as" <l:@L> <t:T> <h:@R> => Some((Span(file, l, h), t)),
+    () => None,
+};
+
+// --- Global --- //
+
+Global: Id<PGlobal> = {
+    "let" <l:@L> <i:Identifier> <h:@R> ":" <t:Type> "=" <e:Expression> "."+ =>
+        PGlobal::new(Span(file, l, h), i, t, e).intern(ctx),
+};
+
+// --- Function --- //
+
+Function: Id<PFunction> = {
+    "extern" "fn" <l:@L> <i:Identifier> <h:@R> <g:MaybeDeclGenerics> <p:DeclParams> <r:MaybeReturn> <w:MaybeRestrictions> "." =>
+        PFunction::new(Span(file, l, h), i, g, p, r, w, None).intern(ctx),
+    "fn" <l:@L> <i:Identifier> <h:@R> <g:MaybeDeclGenerics> <p:DeclParams> <r:MaybeReturn> <w:MaybeRestrictions> "=" <e:Expression> "." =>
+        PFunction::new(Span(file, l, h), i, g, p, r, w, Some(e)).intern(ctx),
+    "async" "fn" <l:@L> <i:Identifier> <h:@R> <g:MaybeDeclGenerics> <p:DeclParams> <r:MaybeReturn> <w:MaybeRestrictions> "=" <e:Expression> "." => {
+        let r = PType::awaitable(r.lookup(ctx).span, r).intern(ctx);
+        let e = PExpression::async_block(e.lookup(ctx).span, e).intern(ctx);
+        PFunction::new(Span(file, l, h), i, g, p, r, w, Some(e)).intern(ctx)
+    },
+};
+
+MaybeDeclGenerics = {
+    "<" <CommaTrailing<SpannedTypeName>> ">",
+    () => vec![],
+};
+
+SpannedTypeName: (Span, Id<str>) = {
+    <l:@L> <t:TypeName> <h:@R> =>
+        (Span(file, l, h), t),
+};
+
+DeclParams = {
+    "(" <CommaTrailingOrEmpty<DeclParam>> ")"
+};
+
+DeclParam: (Span, Id<str>, Id<PType>) = {
+    <l:@L> <i:Identifier> <h:@R> ":" <t:Type> =>
+        (Span(file, l, h), i, t),
+};
+
+MaybeRestrictions: Vec<(Id<PType>, Vec<Id<PTraitType>>)> = {
+    "where" <Comma<TypeRestriction>> => <>,
+    () => vec![],
+};
+
+// --- Object --- //
+
+Object: Id<PObject> = {
+    "object" <l:@L> <t:TypeName> <h:@R> <g:MaybeDeclGenerics> <r:MaybeRestrictions> <o:ObjectMembers> =>
+        PObject::new(false, Span(file, l, h), t, g, r, o).intern(ctx),
+    "struct" <l:@L> <t:TypeName> <h:@R> <g:MaybeDeclGenerics> <r:MaybeRestrictions> <o:ObjectMembers> =>
+        PObject::new(true, Span(file, l, h), t, g, r, o).intern(ctx),
+};
+
+ObjectMembers: PObjectMembers = {
+    <l:@L> "{" <m:CommaTrailingOrEmpty<NamedObjectMember>> "}" <h:@R> =>
+        PObjectMembers::Named(Span(file, l, h), m),
+    <l:@L> "(" <m:CommaTrailingOrEmpty<Type>> ")" <h:@R> =>
+        PObjectMembers::Positional(Span(file, l, h), m),
+    <l:@L> "." <h:@R> =>
+        PObjectMembers::Empty(Span(file, l, h)),
+};
+
+NamedObjectMember: (Span, Id<str>, Id<PType>) = {
+    <l:@L> <i:Identifier> <h:@R> <t:Type> =>
+        (Span(file, l, h), i, t),
+};
+
+// --- Enum --- //
+
+Enum: Id<PEnum> = {
+    "enum" <l:@L> <t:TypeName> <h:@R> <g:MaybeDeclGenerics> <r:MaybeRestrictions> "{" <v:CommaTrailingOrEmpty<EnumVariant>> "}" =>
+        PEnum::new(Span(file, l, h), t, g, r, v).intern(ctx),
+};
+
+EnumVariant: (Span, Id<str>, PObjectMembers) = {
+    <l:@L> <t:TypeName> <h:@R> <e:EnumMembers> => 
+        (Span(file, l, h), t, e),
+};
+
+EnumMembers: PObjectMembers = {
+    <l:@L> "{" <m:CommaTrailingOrEmpty<NamedObjectMember>> "}" <h:@R> =>
+        PObjectMembers::Named(Span(file, l, h), m),
+    <l:@L> "(" <m:CommaTrailingOrEmpty<Type>> ")" <h:@R> =>
+        PObjectMembers::Positional(Span(file, l, h), m),
+    <l:@L> () <h:@R> =>
+        PObjectMembers::Empty(Span(file, l, h)),
+};
+
+// --- Trait --- //
+
+Trait: Id<PTrait> = {
+    "trait" <l:@L> <t:TypeName> <h:@R> <g:MaybeDeclGenerics> <w:MaybeRestrictions> <m:TraitMembers> =>
+        PTrait::new(Span(file, l, h), t, g, w, m).intern(ctx),
+};
+
+TraitMembers = {
+    "{" <(TraitMember)*> "}"
+};
+
+TraitMember: PTraitMember = {
+    "type" <l:@L> <t:TypeName> <h:@R> <r:MaybeTraitTypeRestriction> "." =>
+        PTraitMember::type_member(Span(file, l, h), t, r),
+    "fn" <l:@L> <i:Identifier> <h:@R> <g:MaybeDeclGenerics> <p:DeclObjectParams> <r:MaybeReturn> <w:MaybeRestrictions> =>
+        PTraitMember::function_member(Span(file, l, h), i, g, p.0, p.1, r, w),
+    "async" "fn" <l:@L> <i:Identifier> <h:@R> <g:MaybeDeclGenerics> <p:DeclObjectParams> <r:MaybeReturn> <w:MaybeRestrictions> => {
+        let r = PType::awaitable(r.lookup(ctx).span, r).intern(ctx);
+        PTraitMember::function_member(Span(file, l, h), i, g, p.0, p.1, r, w)
+    }
+};
+
+MaybeTraitTypeRestriction: Vec<Id<PTraitType>> = {
+    ":" <PlusSeparated<TraitType>>,
+    () => vec![],
+};
+
+DeclObjectParams: (bool, Vec<(Span, Id<str>, Id<PType>)>) = {
+    "(" <CommaTrailingOrEmpty<DeclParam>> ")" =>
+        (false, <>),
+    "(" "self" ")" =>
+        (true, vec![]),
+    "(" "self" "," <CommaTrailingOrEmpty<DeclParam>> ")" =>
+        (true, <>),
+};
+
+// -- Impl -- //
+
+Impl: Id<PImpl> = {
+    <l:@L> "impl" <h:@R> <g:MaybeDeclGenerics> <tr:TraitType> "for" <t:Type> <r:MaybeRestrictions>  "{" <m:(ImplMember)*> "}" =>
+        PImpl::new(Span(file, l, h), g, t, Some(tr), r, m).intern(ctx),
+    <l:@L> "impl" <h:@R> <g:MaybeDeclGenerics> "Self" "for" <t:Type> <r:MaybeRestrictions>  "{" <m:(ImplMember)*> "}" =>
+        PImpl::new(Span(file, l, h), g, t, None, r, m).intern(ctx),
+};
+
+ImplMember: PImplMember = {
+    "type" <l:@L> <n:TypeName> <h:@R> "=" <t:Type> "." =>
+        PImplMember::type_member(Span(file, l, h), n, t),
+    "fn" <l:@L> <i:Identifier> <h:@R> <g:MaybeDeclGenerics> <p:DeclObjectParams> <r:MaybeReturn> <w:MaybeRestrictions> "=" <e:Expression> "." =>
+        PImplMember::function_member(Span(file, l, h), i, g, p.0, p.1, r, w, e),
+    "async" "fn" <l:@L> <i:Identifier> <h:@R> <g:MaybeDeclGenerics> <p:DeclObjectParams> <r:MaybeReturn> <w:MaybeRestrictions> "=" <e:Expression> "." => {
+        let r = PType::awaitable(r.lookup(ctx).span, r).intern(ctx);
+        let e = PExpression::async_block(e.lookup(ctx).span, e).intern(ctx);
+        PImplMember::function_member(Span(file, l, h), i, g, p.0, p.1, r, w, e)
+    }
+};
 
 // --- Types --- //
 
@@ -186,14 +361,14 @@ AssociableType<Kind>: Id<PType> = {
     <l:@L> "Char" <h:@R> => PType::char_type(Span(file, l, h)).intern(ctx),
     <l:@L> "Self" <h:@R> => PType::self_type(Span(file, l, h)).intern(ctx),
 
-    <l:@L> "<" <t:Type> "as" <tr:TraitTypeWithAssocs> ">" <h:@R> =>
+    <l:@L> "<" <t:Type> "as" <tr:TraitType> ">" <h:@R> =>
         PType::elaborated_type(Span(file, l, h), t, tr).intern(ctx),
 
     <l:@L> "Dyn" <tr:MaybeDynTraits> <h:@R> =>
         PType::dynamic_type(Span(file, l, h), tr).intern(ctx),
 
     <ComplexSubtype<Kind>>,
-}
+};
 
 ComplexSubtype<Kind>: Id<PType> = {
     // Object or enum types, with optional generic. E.g. `Option<Int>`
@@ -210,12 +385,14 @@ TupleType: Id<PType> = {
 };
 
 TypeRestriction: (Id<PType>, Vec<Id<PTraitType>>) = {
-    <Type> ":" <PlusSeparated<TraitTypeWithAssocs>>,
+    <Type> ":" <PlusSeparated<TraitType>>,
 };
 
-TraitType: PTraitType = {
-    <l:@L> <t:TypeNamePath> <g:MaybeGenerics<"">> <h:@R> =>
-        PTraitType::new_generics(Span(file, l, h), t, g),
+TraitType: Id<PTraitType> = {
+    <l:@L> <t:TypeNamePath> <g:MaybeGenericsOrAssoc> <h:@R> =>
+        PTraitType::new_mixed(Span(file, l, h), t, g).intern(ctx),
+    <l:@L> "Fn" "(" <p:CommaTrailingOrEmpty<Type>> ")" <r:MaybeReturn> <h:@R> =>
+        PTraitType::fn_trait(Span(file, l, h), p, r).intern(ctx),
 };
 
 MaybeGenerics<Kind> = {
@@ -225,14 +402,7 @@ MaybeGenerics<Kind> = {
 };
 
 MaybeDynTraits: Vec<Id<PTraitType>> = {
-    "<" <PlusSeparated<TraitTypeWithAssocs>> ">",
-}
-
-TraitTypeWithAssocs: Id<PTraitType> = {
-    <l:@L> <t:TypeNamePath> <g:MaybeGenericsOrAssoc> <h:@R> =>
-        PTraitType::new_mixed(Span(file, l, h), t, g).intern(ctx),
-    <l:@L> "Fn" "(" <p:CommaTrailingOrEmpty<Type>> ")" <r:MaybeReturn> <h:@R> =>
-        PTraitType::fn_trait(Span(file, l, h), p, r).intern(ctx),
+    "<" <PlusSeparated<TraitType>> ">",
 };
 
 MaybeGenericsOrAssoc = {
@@ -250,167 +420,6 @@ MaybeReturn: Id<PType> = {
     "->" <Type>,
     <l:@L> () <h:@R> => PType::infer(Span(file, l, h)).intern(ctx),
 };
-
-// --- Use --- //
-
-Use: Id<PUse> = {
-    <p:"pub"?> "use" <u:UseElement> "." =>
-        todo!(),
-    <p:"pub"?> "use" "::" <u:UseElement> "." =>
-        todo!(),
-};
-
-UseElement: Vec<PUseElement> = {
-    <Identifier> "::" <UseElement> =>
-        todo!(),
-    <Identifier> <MaybeRename<Identifier>> =>
-        todo!(),
-    <TypeName> <MaybeRename<TypeName>> =>
-        todo!(),
-    "self" <MaybeRename<TypeName>> =>
-        todo!(),
-    "{" <CommaTrailing<UseElement>> "}" =>
-        todo!(),
-};
-
-MaybeRename<T>: Option<T> = {
-    "as" <T> => Some(<>),
-    () => None,
-}
-
-// --- Global --- //
-
-Global: Id<PGlobal> = {
-    "let" <l:@L> <i:Identifier> <h:@R> ":" <t:Type> "=" <e:Expression> "."+ =>
-        PGlobal::new(Span(file, l, h), i, t, e).intern(ctx),
-};
-
-// --- Function --- //
-
-Function: Id<PFunction> = {
-    "extern" "fn" <l:@L> <i:Identifier> <h:@R> <g:MaybeDeclGenerics> <p:DeclParams> <r:MaybeReturn> <w:MaybeRestrictions> "." =>
-        PFunction::external(Span(file, l, h), i, g, p, r, w, None),
-    "fn" <l:@L> <i:Identifier> <h:@R> <g:MaybeDeclGenerics> <p:DeclParams> <r:MaybeReturn> <w:MaybeRestrictions> "=" <e:Expression> "." =>
-        PFunction::new(Span(file, l, h), i, g, p, r, w, Some(e)),
-    "async" "fn" <l:@L> <i:Identifier> <h:@R> <g:MaybeDeclGenerics> <p:DeclParams> <r:MaybeReturn> <w:MaybeRestrictions> "=" <e:Expression> "." => {
-        let r = PType::awaitable(r.lookup(ctx).span, r).intern(ctx);
-        let e = PExpression::async_block(e.lookup(ctx).span, e).intern(ctx);
-        PFunction::new(Span(file, l, h), i, g, p, r, w, Some(e))
-    },
-};
-
-MaybeDeclGenerics = {
-    "<" <CommaTrailing<TypeName>> ">",
-    () => vec![],
-};
-
-DeclParams = {
-    "(" <CommaTrailingOrEmpty<DeclParam>> ")"
-};
-
-DeclParam: (Span, Id<str>, Id<PType>) = {
-    <l:@L> <i:Identifier> <h:@R> ":" <t:Type> =>
-        (Span(file, l, h), i, t),
-}
-
-MaybeRestrictions: Vec<AstTypeRestriction> = {
-    "where" <Comma<TypeRestriction>> => AstTypeRestriction::flatten(<>),
-    () => vec![],
-};
-
-// --- Object --- //
-
-Object: Id<PObject> = {
-    "object" <l:@L> <t:TypeName> <h:@R> <g:MaybeDeclGenerics> <r:MaybeRestrictions> <o:ObjectMembers> =>
-        todo!(),
-    "struct" <l:@L> <t:TypeName> <h:@R> <g:MaybeDeclGenerics> <r:MaybeRestrictions> <o:ObjectMembers> =>
-        todo!(),
-}
-
-ObjectMembers: PObjectMembers = {
-    "{" <CommaTrailingOrEmpty<NamedObjectMember>> "}" =>
-        PObjectMembers::Named(<>),
-    "(" <CommaTrailingOrEmpty<Type>> ")" =>
-        PObjectMembers::Positional(<>),
-    "." =>
-        PObjectMembers::Empty,
-}
-
-NamedObjectMember: (Span, Id<str>, Id<PType>) = {
-    <l:@L> <i:Identifier> <h:@R> <t:Type> =>
-        (Span(file, l, h), i, t),
-}
-
-// --- Enum --- //
-
-Enum: Id<PEnum> = {
-    "enum" <l:@L> <t:TypeName> <h:@R> <g:MaybeDeclGenerics> <r:MaybeRestrictions> "{" <v:CommaTrailingOrEmpty<EnumVariant>> "}" =>
-        todo!(),
-}
-
-EnumVariant: (Id<str>, PObjectMembers) = {
-    <TypeName> <EnumMembers> => (<>),
-}
-
-EnumMembers: PObjectMembers = {
-    "{" <CommaTrailingOrEmpty<NamedObjectMember>> "}" =>
-        PObjectMembers::Named(<>),
-    "(" <CommaTrailingOrEmpty<Type>> ")" =>
-        PObjectMembers::Positional(<>),
-    () =>
-        PObjectMembers::Empty,
-}
-
-// --- Trait --- //
-
-Trait: Id<PTrait> = {
-    "trait" <l:@L> <t:TypeName> <h:@R> <g:MaybeDeclGenerics> <r:MaybeRestrictions> <o:TraitMembers> =>
-}
-
-TraitMembers = {
-    "{" <(TraitMember)*> "}"
-}
-
-TraitMember: PTraitMember = {
-    "type" <TypeName> <MaybeTraitTypeRestriction> "." =>
-        todo!(),
-    "fn" <l:@L> <i:Identifier> <h:@R> <g:MaybeDeclGenerics> <p:DeclObjectParams> <r:MaybeReturn> <w:MaybeRestrictions> =>
-        todo!(),
-    "async" "fn" <l:@L> <i:Identifier> <h:@R> <g:MaybeDeclGenerics> <p:DeclObjectParams> <r:MaybeReturn> <w:MaybeRestrictions> =>
-        todo!(),
-}
-
-MaybeTraitTypeRestriction: Vec<Id<PTraitType>> = {
-    ":" <PlusSeparated<TraitTypeWithAssocs>>,
-    () => vec![],
-}
-
-DeclObjectParams: (bool, Vec<(Span, Id<str>, Id<PType>)>) = {
-    "(" <CommaTrailingOrEmpty<DeclParam>> ")" =>
-        (false, <>),
-    "(" "self" ")" =>
-        (true, vec![]),
-    "(" "self" "," <CommaTrailingOrEmpty<DeclParam>> ")" =>
-        (true, <>),
-};
-
-// -- Impl -- //
-
-Impl: Id<PImpl> = {
-    <l:@L> "impl" <h:@R> <g:MaybeDeclGenerics> <tr:TraitType> "for" <t:Type> <r:MaybeRestrictions>  "{" <m:(ImplMember)*> "}" =>
-        todo!(),
-    <l:@L> "impl" <h:@R> <g:MaybeDeclGenerics> "self" "for" <t:Type> <r:MaybeRestrictions>  "{" <m:(ImplMember)*> "}" =>
-        todo!(),
-}
-
-ImplMember: PImplMember = {
-    "type" <TypeName> "=" <Type> "." =>
-        todo!(),
-    "fn" <l:@L> <i:Identifier> <h:@R> <g:MaybeDeclGenerics> <p:DeclObjectParams> <r:MaybeReturn> <w:MaybeRestrictions> "=" <e:Expression> "." =>
-        todo!(),
-    "async" "fn" <l:@L> <i:Identifier> <h:@R> <g:MaybeDeclGenerics> <p:DeclObjectParams> <r:MaybeReturn> <w:MaybeRestrictions> "=" <e:Expression> "." =>
-        todo!(),
-}
 
 // --- Statement --- //
 
@@ -502,7 +511,7 @@ Expression9<Kind> = {
     <l:@L> <e:Expression9<Kind>> "?" <h:@R> =>
         PExpression::throw(Span(file, l, h), e).intern(ctx),
     <Expression10<Kind>>,
-}
+};
 
 Expression10<Kind> = BaseExpression<Kind>;
 

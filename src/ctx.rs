@@ -4,7 +4,10 @@ use codespan_reporting::files::Files;
 
 use crate::{
     file::AFile,
-    parser::{PExpression, PGlobal, PModule, PPattern, PStatement, PTraitType, PType},
+    parser::{
+        PEnum, PExpression, PFunction, PGlobal, PImpl, PModule, PObject, PPattern, PStatement,
+        PTrait, PTraitType, PType, PUse,
+    },
     read::{RawFile, RawFileSource},
     util::{AResult, Id},
 };
@@ -41,6 +44,24 @@ pub trait AdelaideContext: salsa::Database {
 
     #[salsa::interned]
     fn intern_pmodule(&self, key: Arc<PModule>) -> Id<PModule>;
+
+    #[salsa::interned]
+    fn intern_puse(&self, key: Arc<PUse>) -> Id<PUse>;
+
+    #[salsa::interned]
+    fn intern_pfunction(&self, key: Arc<PFunction>) -> Id<PFunction>;
+
+    #[salsa::interned]
+    fn intern_pobject(&self, key: Arc<PObject>) -> Id<PObject>;
+
+    #[salsa::interned]
+    fn intern_ptrait(&self, key: Arc<PTrait>) -> Id<PTrait>;
+
+    #[salsa::interned]
+    fn intern_pimpl(&self, key: Arc<PImpl>) -> Id<PImpl>;
+
+    #[salsa::interned]
+    fn intern_penum(&self, key: Arc<PEnum>) -> Id<PEnum>;
 
     #[salsa::interned]
     fn intern_ptype(&self, key: Arc<PType>) -> Id<PType>;

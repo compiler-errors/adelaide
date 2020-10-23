@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, VecDeque},
+    sync::Arc,
+};
 
 use either::Either;
 
@@ -11,8 +14,14 @@ use crate::{
 
 #[derive(Debug, Hash, Eq, PartialEq, PrettyPrint)]
 pub enum PItem {
-    Global(Id<PGlobal>),
     Module(Id<PModule>),
+    Use(Id<PUse>),
+    Global(Id<PGlobal>),
+    Function(Id<PFunction>),
+    Object(Id<PObject>),
+    Enum(Id<PEnum>),
+    Trait(Id<PTrait>),
+    Impl(Id<PImpl>),
 }
 
 #[derive(Debug, Hash, Eq, PartialEq, PrettyPrint)]
@@ -29,6 +38,380 @@ impl Lookup for PModule {
 
     fn intern_self(self: Arc<Self>, ctx: &dyn AdelaideContext) -> Id<Self> {
         ctx.intern_pmodule(self)
+    }
+}
+
+#[derive(Debug, Hash, Eq, PartialEq, PrettyPrint)]
+pub struct PUse {
+    span: Span,
+    absolute: bool,
+    elements: Vec<PUseElement>,
+}
+
+impl Lookup for PUse {
+    fn lookup(id: Id<Self>, ctx: &dyn AdelaideContext) -> Arc<Self> {
+        ctx.lookup_intern_puse(id)
+    }
+
+    fn intern_self(self: Arc<Self>, ctx: &dyn AdelaideContext) -> Id<Self> {
+        ctx.intern_puse(self)
+    }
+}
+
+impl PUse {
+    pub fn new(span: Span, absolute: bool, elements: Vec<PUseElement>) -> PUse {
+        PUse {
+            span,
+            absolute,
+            elements,
+        }
+    }
+}
+
+#[derive(Debug, Hash, Eq, PartialEq, PrettyPrint)]
+pub enum PUseElement {
+    UseAll(VecDeque<(Span, Id<str>)>, Span),
+    UseSelf(VecDeque<(Span, Id<str>)>, Span, Option<(Span, Id<str>)>),
+    Use(VecDeque<(Span, Id<str>)>, Option<(Span, Id<str>)>),
+}
+
+impl PUseElement {
+    pub fn in_mod(span: Span, id: Id<str>, mut e: Vec<PUseElement>) -> Vec<PUseElement> {
+        for i in e.iter_mut() {
+            match i {
+                PUseElement::UseAll(v, _)
+                | PUseElement::UseSelf(v, _, _)
+                | PUseElement::Use(v, _) => {
+                    v.push_front((span, id));
+                },
+            }
+        }
+
+        e
+    }
+
+    pub fn plain_use(span: Span, i: Id<str>, r: Option<(Span, Id<str>)>) -> Vec<PUseElement> {
+        vec![PUseElement::Use(vec![(span, i)].into(), r)]
+    }
+
+    pub fn self_use(span: Span, r: Option<(Span, Id<str>)>) -> Vec<PUseElement> {
+        vec![PUseElement::UseSelf(vec![].into(), span, r)]
+    }
+
+    pub fn use_all(span: Span) -> Vec<PUseElement> {
+        vec![PUseElement::UseAll(vec![].into(), span)]
+    }
+}
+
+impl PGlobal {
+    pub fn new(span: Span, name: Id<str>, ty: Id<PType>, expr: Id<PExpression>) -> PGlobal {
+        PGlobal {
+            span,
+            name,
+            ty,
+            expr,
+        }
+    }
+}
+
+impl Lookup for PGlobal {
+    fn lookup(id: Id<Self>, ctx: &dyn AdelaideContext) -> Arc<Self> {
+        ctx.lookup_intern_pglobal(id)
+    }
+
+    fn intern_self(self: Arc<Self>, ctx: &dyn AdelaideContext) -> Id<Self> {
+        ctx.intern_pglobal(self)
+    }
+}
+
+#[derive(Debug, Hash, Eq, PartialEq, PrettyPrint)]
+pub struct PFunction {
+    span: Span,
+    name: Id<str>,
+    generics: Vec<(Span, Id<str>)>,
+    parameters: Vec<(Span, Id<str>, Id<PType>)>,
+    return_ty: Id<PType>,
+    restrictions: Vec<(Id<PType>, Vec<Id<PTraitType>>)>,
+    body: Option<Id<PExpression>>,
+}
+
+impl Lookup for PFunction {
+    fn lookup(id: Id<Self>, ctx: &dyn AdelaideContext) -> Arc<Self> {
+        ctx.lookup_intern_pfunction(id)
+    }
+
+    fn intern_self(self: Arc<Self>, ctx: &dyn AdelaideContext) -> Id<Self> {
+        ctx.intern_pfunction(self)
+    }
+}
+
+impl PFunction {
+    pub fn new(
+        span: Span,
+        name: Id<str>,
+        generics: Vec<(Span, Id<str>)>,
+        parameters: Vec<(Span, Id<str>, Id<PType>)>,
+        return_ty: Id<PType>,
+        restrictions: Vec<(Id<PType>, Vec<Id<PTraitType>>)>,
+        body: Option<Id<PExpression>>,
+    ) -> PFunction {
+        PFunction {
+            span,
+            name,
+            generics,
+            parameters,
+            return_ty,
+            restrictions,
+            body,
+        }
+    }
+}
+
+#[derive(Debug, Hash, Eq, PartialEq, PrettyPrint)]
+pub struct PObject {
+    is_structural: bool,
+    span: Span,
+    name: Id<str>,
+    generics: Vec<(Span, Id<str>)>,
+    restrictions: Vec<(Id<PType>, Vec<Id<PTraitType>>)>,
+    members: PObjectMembers,
+}
+
+impl Lookup for PObject {
+    fn lookup(id: Id<Self>, ctx: &dyn AdelaideContext) -> Arc<Self> {
+        ctx.lookup_intern_pobject(id)
+    }
+
+    fn intern_self(self: Arc<Self>, ctx: &dyn AdelaideContext) -> Id<Self> {
+        ctx.intern_pobject(self)
+    }
+}
+
+impl PObject {
+    pub fn new(
+        is_structural: bool,
+        span: Span,
+        name: Id<str>,
+        generics: Vec<(Span, Id<str>)>,
+        restrictions: Vec<(Id<PType>, Vec<Id<PTraitType>>)>,
+        members: PObjectMembers,
+    ) -> PObject {
+        PObject {
+            is_structural,
+            span,
+            name,
+            generics,
+            restrictions,
+            members,
+        }
+    }
+}
+
+#[derive(Debug, Hash, Eq, PartialEq, PrettyPrint)]
+pub enum PObjectMembers {
+    Empty(Span),
+    Positional(Span, Vec<Id<PType>>),
+    Named(Span, Vec<(Span, Id<str>, Id<PType>)>),
+}
+
+#[derive(Debug, Hash, Eq, PartialEq, PrettyPrint)]
+pub struct PTrait {
+    span: Span,
+    name: Id<str>,
+    generics: Vec<(Span, Id<str>)>,
+    restrictions: Vec<(Id<PType>, Vec<Id<PTraitType>>)>,
+    members: Vec<PTraitMember>,
+}
+
+impl Lookup for PTrait {
+    fn lookup(id: Id<Self>, ctx: &dyn AdelaideContext) -> Arc<Self> {
+        ctx.lookup_intern_ptrait(id)
+    }
+
+    fn intern_self(self: Arc<Self>, ctx: &dyn AdelaideContext) -> Id<Self> {
+        ctx.intern_ptrait(self)
+    }
+}
+
+impl PTrait {
+    pub fn new(
+        span: Span,
+        name: Id<str>,
+        generics: Vec<(Span, Id<str>)>,
+        restrictions: Vec<(Id<PType>, Vec<Id<PTraitType>>)>,
+        members: Vec<PTraitMember>,
+    ) -> PTrait {
+        PTrait {
+            span,
+            name,
+            generics,
+            restrictions,
+            members,
+        }
+    }
+}
+
+#[derive(Debug, Hash, Eq, PartialEq, PrettyPrint)]
+pub enum PTraitMember {
+    Type(Span, Id<str>, Vec<Id<PTraitType>>),
+    Function {
+        span: Span,
+        name: Id<str>,
+        generics: Vec<(Span, Id<str>)>,
+        has_self: bool,
+        parameters: Vec<(Span, Id<str>, Id<PType>)>,
+        return_ty: Id<PType>,
+        restrictions: Vec<(Id<PType>, Vec<Id<PTraitType>>)>,
+    },
+}
+
+impl PTraitMember {
+    pub fn type_member(
+        span: Span,
+        name: Id<str>,
+        restrictions: Vec<Id<PTraitType>>,
+    ) -> PTraitMember {
+        PTraitMember::Type(span, name, restrictions)
+    }
+
+    pub fn function_member(
+        span: Span,
+        name: Id<str>,
+        generics: Vec<(Span, Id<str>)>,
+        has_self: bool,
+        parameters: Vec<(Span, Id<str>, Id<PType>)>,
+        return_ty: Id<PType>,
+        restrictions: Vec<(Id<PType>, Vec<Id<PTraitType>>)>,
+    ) -> PTraitMember {
+        PTraitMember::Function {
+            span,
+            name,
+            generics,
+            has_self,
+            parameters,
+            return_ty,
+            restrictions,
+        }
+    }
+}
+
+#[derive(Debug, Hash, Eq, PartialEq, PrettyPrint)]
+pub struct PImpl {
+    span: Span,
+    generics: Vec<(Span, Id<str>)>,
+    ty: Id<PType>,
+    trait_ty: Option<Id<PTraitType>>,
+    restrictions: Vec<(Id<PType>, Vec<Id<PTraitType>>)>,
+    members: Vec<PImplMember>,
+}
+
+impl Lookup for PImpl {
+    fn lookup(id: Id<Self>, ctx: &dyn AdelaideContext) -> Arc<Self> {
+        ctx.lookup_intern_pimpl(id)
+    }
+
+    fn intern_self(self: Arc<Self>, ctx: &dyn AdelaideContext) -> Id<Self> {
+        ctx.intern_pimpl(self)
+    }
+}
+
+impl PImpl {
+    pub fn new(
+        span: Span,
+        generics: Vec<(Span, Id<str>)>,
+        ty: Id<PType>,
+        trait_ty: Option<Id<PTraitType>>,
+        restrictions: Vec<(Id<PType>, Vec<Id<PTraitType>>)>,
+        members: Vec<PImplMember>,
+    ) -> PImpl {
+        PImpl {
+            span,
+            generics,
+            ty,
+            trait_ty,
+            restrictions,
+            members,
+        }
+    }
+}
+
+#[derive(Debug, Hash, Eq, PartialEq, PrettyPrint)]
+pub enum PImplMember {
+    Type(Span, Id<str>, Id<PType>),
+    Function {
+        span: Span,
+        name: Id<str>,
+        generics: Vec<(Span, Id<str>)>,
+        has_self: bool,
+        parameters: Vec<(Span, Id<str>, Id<PType>)>,
+        return_ty: Id<PType>,
+        restrictions: Vec<(Id<PType>, Vec<Id<PTraitType>>)>,
+        body: Id<PExpression>,
+    },
+}
+
+impl PImplMember {
+    pub fn type_member(span: Span, name: Id<str>, ty: Id<PType>) -> PImplMember {
+        PImplMember::Type(span, name, ty)
+    }
+
+    pub fn function_member(
+        span: Span,
+        name: Id<str>,
+        generics: Vec<(Span, Id<str>)>,
+        has_self: bool,
+        parameters: Vec<(Span, Id<str>, Id<PType>)>,
+        return_ty: Id<PType>,
+        restrictions: Vec<(Id<PType>, Vec<Id<PTraitType>>)>,
+        body: Id<PExpression>,
+    ) -> PImplMember {
+        PImplMember::Function {
+            span,
+            name,
+            generics,
+            has_self,
+            parameters,
+            return_ty,
+            restrictions,
+            body,
+        }
+    }
+}
+
+#[derive(Debug, Hash, Eq, PartialEq, PrettyPrint)]
+pub struct PEnum {
+    span: Span,
+    name: Id<str>,
+    generics: Vec<(Span, Id<str>)>,
+    restrictions: Vec<(Id<PType>, Vec<Id<PTraitType>>)>,
+    variants: Vec<(Span, Id<str>, PObjectMembers)>,
+}
+
+impl Lookup for PEnum {
+    fn lookup(id: Id<Self>, ctx: &dyn AdelaideContext) -> Arc<Self> {
+        ctx.lookup_intern_penum(id)
+    }
+
+    fn intern_self(self: Arc<Self>, ctx: &dyn AdelaideContext) -> Id<Self> {
+        ctx.intern_penum(self)
+    }
+}
+
+impl PEnum {
+    pub fn new(
+        span: Span,
+        name: Id<str>,
+        generics: Vec<(Span, Id<str>)>,
+        restrictions: Vec<(Id<PType>, Vec<Id<PTraitType>>)>,
+        variants: Vec<(Span, Id<str>, PObjectMembers)>,
+    ) -> PEnum {
+        PEnum {
+            span,
+            name,
+            generics,
+            restrictions,
+            variants,
+        }
     }
 }
 
@@ -181,6 +564,13 @@ impl PType {
             data: PTypeData::Associated(t, a),
         }
     }
+
+    pub fn awaitable(span: Span, t: Id<PType>) -> PType {
+        PType {
+            span,
+            data: PTypeData::Awaitable(t),
+        }
+    }
 }
 
 #[derive(Debug, Hash, Eq, PartialEq, PrettyPrint)]
@@ -255,27 +645,6 @@ pub struct PGlobal {
     pub expr: Id<PExpression>,
 }
 
-impl PGlobal {
-    pub fn new(span: Span, name: Id<str>, ty: Id<PType>, expr: Id<PExpression>) -> PGlobal {
-        PGlobal {
-            span,
-            name,
-            ty,
-            expr,
-        }
-    }
-}
-
-impl Lookup for PGlobal {
-    fn lookup(id: Id<Self>, ctx: &dyn AdelaideContext) -> Arc<Self> {
-        ctx.lookup_intern_pglobal(id)
-    }
-
-    fn intern_self(self: Arc<Self>, ctx: &dyn AdelaideContext) -> Id<Self> {
-        ctx.intern_pglobal(self)
-    }
-}
-
 #[derive(Debug, Hash, Eq, PartialEq, PrettyPrint)]
 pub struct PExpression {
     pub span: Span,
@@ -283,7 +652,7 @@ pub struct PExpression {
 }
 
 #[derive(Debug, Hash, Eq, PartialEq, PrettyPrint)]
-enum PExpressionData {
+pub enum PExpressionData {
     SelfRef,
     Unimplemented,
     Identifiers(Vec<Id<str>>, Vec<Id<PType>>),
@@ -750,7 +1119,7 @@ pub struct PStatement {
 }
 
 #[derive(Debug, Hash, Eq, PartialEq, PrettyPrint)]
-enum PStatementData {
+pub enum PStatementData {
     Expression(Id<PExpression>),
     Let(Id<PPattern>, Id<PExpression>),
 }
@@ -789,7 +1158,7 @@ pub struct PPattern {
 }
 
 #[derive(Debug, Hash, Eq, PartialEq, PrettyPrint)]
-enum PPatternData {
+pub enum PPatternData {
     Underscore,
     Literal(PLiteral),
     Identifier(Id<str>),
