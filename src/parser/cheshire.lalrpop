@@ -17,6 +17,7 @@ extern {
         "." => Token::Dot,
         ".." => Token::DotDot,
         "..." => Token::Ellipsis,
+        "..=" => Token::DotDotEq,
         "," => Token::Comma,
         ",,," => Token::Commalipses,
         ":" => Token::Colon,
@@ -480,6 +481,8 @@ Expression0<Kind>: Id<PExpression> = {
     <l:@L> <a:Expression1<Kind>> "=" <b:Expression0<Kind>> <h:@R> =>
         PExpression::assign(Span(file, l, h), a, b).intern(ctx),
     <l:@L> <a:Expression1<Kind>> <t:".."> <b:Expression1<Kind>> <h:@R> =>
+        PExpression::binop(Span(file, l, h), a, PBinopKind::from(t), b).intern(ctx),
+    <l:@L> <a:Expression1<Kind>> <t:"..="> <b:Expression1<Kind>> <h:@R> =>
         PExpression::binop(Span(file, l, h), a, PBinopKind::from(t), b).intern(ctx),
     <l:@L> <a:Expression1<Kind>> <t:"..."> <h:@R> =>
         PExpression::infinite_range(Span(file, l, h), a).intern(ctx),

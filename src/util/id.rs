@@ -1,5 +1,7 @@
 use crate::{ctx::AdelaideContext, util::PrettyPrint};
-use std::{fmt::Debug, hash::Hash, marker::PhantomData, num::NonZeroU32, sync::Arc};
+use std::{
+    fmt::Debug, hash::Hash, lazy::SyncOnceCell, marker::PhantomData, num::NonZeroU32, sync::Arc,
+};
 
 #[must_use]
 pub struct Id<T: ?Sized>(NonZeroU32, PhantomData<T>);
@@ -109,3 +111,68 @@ impl Lookup for str {
         ctx.intern_str(self)
     }
 }
+
+pub struct BackId<T: ?Sized>(SyncOnceCell<Id<T>>);
+
+impl<T: ?Sized> PartialEq for BackId<T> {
+    fn eq(&self, other: &Self) -> bool {
+        true
+    }
+}
+
+impl<T: ?Sized> Eq for BackId<T> {}
+
+impl<T: ?Sized> Hash for BackId<T> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        // Do nothing lol
+    }
+}
+
+impl<T: ?Sized> Debug for BackId<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0.get() {
+            Some(i) => write!(f, "Id<{}>({})", std::any::type_name::<T>(), i.0),
+            None => write!(f, "Id<{}>(UNSET)", std::any::type_name::<T>()),
+        }
+    }
+}
+
+impl<T: ?Sized> PrettyPrint for BackId<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter, _: &dyn AdelaideContext) -> std::fmt::Result {
+        <Self as Debug>::fmt(self, f)
+    }
+}
+
+impl<T: Lookup + ?Sized> BackId<T> {
+    pub fn new() -> BackId<T> {
+        BackId(SyncOnceCell::new())
+    }
+
+    pub fn set(&self, id: Id<T>) {
+        self.0.set(id).expect("ID should only be initialized once");
+    }
+
+    pub fn lookup(self, ctx: &dyn AdelaideContext) -> Arc<T> {
+        self.0
+            .get()
+            .expect("ID should be initialized by now")
+            .lookup(ctx)
+    }
+
+    pub fn id(self) -> u32 {
+        self.0.get().expect("ID: should be initialized by now").id()
+    }
+}
+
+impl<T: Lookup + ?Sized> From<Id<T>> for BackId<T> {
+    fn from(id: Id<T>) -> Self {
+        BackId(id.into())
+    }
+}
+
+/*
+
+TODO: BackId should be opaque, e.g. Equals is always true, Hash is always 0, etc.
+PrettyPrint should print the value of the Id if it exists, and UNSET if not.
+
+*/

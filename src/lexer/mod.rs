@@ -165,7 +165,7 @@ impl<'input> Lexer<'input> {
                     if self.current_char == EOF {
                         let end_pos = self.current_pos;
 
-                        return Err(AError::LexerError(
+                        return Err(AError::SpanError(
                             Span(self.file, start_pos, end_pos),
                             "EOF encountered in block comment".to_string(),
                         ));
@@ -204,6 +204,9 @@ impl<'input> Lexer<'input> {
                         if self.current_char == '.' {
                             self.bump(1);
                             Ok(Token::Ellipsis)
+                        } else if self.current_char == '=' {
+                            self.bump(1);
+                            Ok(Token::DotDotEq)
                         } else {
                             Ok(Token::DotDot)
                         }
@@ -218,7 +221,7 @@ impl<'input> Lexer<'input> {
                         self.bump(1);
 
                         if self.current_char != ',' {
-                            return Err(AError::LexerError(
+                            return Err(AError::SpanError(
                                 Span(self.file, self.current_pos, self.current_pos + 1),
                                 "Expected a third comma for commalipses,,,".to_string(),
                             ));
@@ -370,7 +373,7 @@ impl<'input> Lexer<'input> {
                     Ok(Token::Question)
                 },
                 c =>
-                    return Err(AError::LexerError(
+                    return Err(AError::SpanError(
                         Span(self.file, self.current_pos, self.current_pos + 1),
                         format!("Unknown symbol '{}'", c),
                     )),
@@ -447,7 +450,7 @@ impl<'input> Lexer<'input> {
                         ret = LexStringChar::InterpolateBegin;
                     },
                     c => {
-                        return Err(AError::LexerError(
+                        return Err(AError::SpanError(
                             Span(self.file, self.current_pos, self.current_pos + 1),
                             format!("Unknown escaped character in string '\\{}'", c),
                         ));
@@ -460,7 +463,7 @@ impl<'input> Lexer<'input> {
                 self.bump(1);
             },
             '\r' | '\n' | EOF => {
-                return Err(AError::LexerError(
+                return Err(AError::SpanError(
                     Span(self.file, self.current_pos, self.current_pos + 1),
                     "Reached end of line in string".to_string(),
                 ));
@@ -487,7 +490,7 @@ impl<'input> Lexer<'input> {
                     '\'' => '\'',
                     '\\' => '\\',
                     c => {
-                        return Err(AError::LexerError(
+                        return Err(AError::SpanError(
                             Span(self.file, self.current_pos, self.current_pos + 1),
                             format!("Unknown escaped character in literal '\\{}'", c),
                         ));
@@ -503,7 +506,7 @@ impl<'input> Lexer<'input> {
         };
 
         if self.current_char != '\'' {
-            return Err(AError::LexerError(
+            return Err(AError::SpanError(
                 Span(self.file, self.current_pos, self.current_pos + 1),
                 "Unclosed character literal".to_string(),
             ));
@@ -575,7 +578,7 @@ impl<'input> Lexer<'input> {
                 }
 
                 if !expect_number {
-                    return Err(AError::LexerError(
+                    return Err(AError::SpanError(
                         Span(self.file, start, self.current_pos),
                         format!(
                             "Expected a numerical value following the exponential: {}",
@@ -666,7 +669,7 @@ impl<'input> Lexer<'input> {
                 'A'..='Z' => Token::TypeName(string.intern(self.ctx)),
                 'a'..='z' => Token::Identifier(string.intern(self.ctx)),
                 '_' =>
-                    return Err(AError::LexerError(
+                    return Err(AError::SpanError(
                         Span(self.file, start, self.current_pos),
                         format!("Type name or identifer cannot begin with `_`"),
                     )),

@@ -149,21 +149,25 @@ impl<T> Into<String> for [T] where T: Into<String> {
   }.
 }
 
-trait Range<T> {
-  type RangeKind.
-  fn range(self, t: T) -> <Self as Range<T>>::RangeKind.
+enum Bound<T> {
+  Inclusive(T),
+  Exclusive(T),
+  Unbounded,
 }
 
-impl Range<()> for Int {
-  type RangeKind = RangeIterator.
-  fn range(self, t: ()) -> RangeIterator =
-    RangeIterator::Infinite(self).
+trait Range<T> {
+  type RangeKind.
+  fn range(self, t: Bound<T>) -> <Self as Range<T>>::RangeKind.
 }
 
 impl Range<Int> for Int {
   type RangeKind = RangeIterator.
-  fn range(self, t: Int) -> RangeIterator =
-    RangeIterator::Finite(self, t).
+
+  fn range(self, t: Bound<Int>) -> RangeIterator = match t {
+    Bound::Inclusive(t) => RangeIterator::Inclusive(self, t),
+    Bound::Exclusive(t) => RangeIterator::Exclusive(self, t),
+    Bound::Unbounded => RangeIterator::Unbounded(self),
+  }.
 }
 
 /* TODO: Not really an internal fn, but I can't resize arrays that have slices to them. It's too risky::! */

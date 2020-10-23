@@ -8,6 +8,7 @@ pub enum Token {
     Dot,         //    .
     DotDot,      //    ..
     Ellipsis,    //    ...
+    DotDotEq,    //    ..=
     Comma,       //    ,
     Commalipses, //    ,,,
     Colon,       //    :
@@ -112,6 +113,7 @@ impl Display for Token {
             Token::Dot => write!(f, "\".\""),
             Token::DotDot => write!(f, "\"..\""),
             Token::Ellipsis => write!(f, "\"...\""),
+            Token::DotDotEq => write!(f, "\"..=\""),
             Token::Comma => write!(f, "\",\""),
             Token::Commalipses => write!(f, "\",,,\""),
             Token::Colon => write!(f, "\":\""),

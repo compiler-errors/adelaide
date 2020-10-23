@@ -25,7 +25,8 @@ trait FromIterator<I> {
 }
 
 enum RangeIterator {
-  Finite(Int, Int),
+  Inclusive(Int, Int),
+  Exclusive(Int, Int),
   Infinite(Int),
 }
 
@@ -34,9 +35,15 @@ impl Iterator for RangeIterator {
 
   fn next(self) -> (Option<Int>, Self) = {
     match self {
-      RangeIterator::Finite(a, b) =>
+      RangeIterator::Inclusive(a, b) =>
+        if a <= b {
+          (Some(a), RangeIterator::Inclusive(a + 1, b))
+        } else {
+          (None, self)
+        },
+      RangeIterator::Exclusive(a, b) =>
         if a < b {
-          (Some(a), RangeIterator::Finite(a + 1, b))
+          (Some(a), RangeIterator::Exclusive(a + 1, b))
         } else {
           (None, self)
         },
@@ -47,14 +54,16 @@ impl Iterator for RangeIterator {
 
   fn has_next(self) -> Bool = {
     match self {
-      RangeIterator::Finite(a, b) => a < b,
+      RangeIterator::Inclusive(a, b) => a <= b,
+      RangeIterator::Exclusive(a, b) => a < b,
       RangeIterator::Infinite(_) => true,
     }
   }.
 
   fn size_hint(self) -> Int = {
     match self {
-      RangeIterator::Finite(a, b) => b - a,
+      RangeIterator::Inclusive(a, b) => b - a + 1,
+      RangeIterator::Exclusive(a, b) => b - a,
       RangeIterator::Infinite(_) => -1,
     }
   }.

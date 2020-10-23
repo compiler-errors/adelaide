@@ -1,7 +1,4 @@
-use std::{
-    collections::{BTreeMap, VecDeque},
-    sync::Arc,
-};
+use std::{collections::VecDeque, sync::Arc};
 
 use either::Either;
 
@@ -9,7 +6,7 @@ use crate::{
     ctx::AdelaideContext,
     file::AFile,
     lexer::{Span, Token},
-    util::{Id, Lookup},
+    util::{BackId, Id, Lookup},
 };
 
 #[derive(Debug, Hash, Eq, PartialEq, PrettyPrint)]
@@ -26,8 +23,7 @@ pub enum PItem {
 
 #[derive(Debug, Hash, Eq, PartialEq, PrettyPrint)]
 pub struct PModule {
-    #[plain]
-    pub file_id: Id<AFile>,
+    pub file_id: BackId<AFile>,
     pub items: Vec<PItem>,
 }
 
@@ -623,15 +619,6 @@ impl PTraitType {
         }
     }
 
-    pub fn new_generics(span: Span, path: Vec<Id<str>>, generics: Vec<Id<PType>>) -> PTraitType {
-        PTraitType::Plain {
-            span,
-            path,
-            generics,
-            bounds: vec![],
-        }
-    }
-
     pub fn fn_trait(span: Span, params: Vec<Id<PType>>, ret: Id<PType>) -> PTraitType {
         PTraitType::Function { span, params, ret }
     }
@@ -756,7 +743,7 @@ impl PExpression {
     pub fn unimplemented(span: Span) -> PExpression {
         PExpression {
             span,
-            data: PExpressionData::SelfRef,
+            data: PExpressionData::Unimplemented,
         }
     }
 
@@ -1051,7 +1038,8 @@ impl Lookup for PExpression {
 
 #[derive(Debug, Hash, Eq, PartialEq, PrettyPrint)]
 pub enum PBinopKind {
-    Range,
+    RangeInclusive,
+    RangeExclusive,
     Assign,
     OrCircuit,
     AndCircuit,
@@ -1073,7 +1061,8 @@ pub enum PBinopKind {
 impl From<Token> for PBinopKind {
     fn from(t: Token) -> Self {
         match t {
-            Token::DotDot => PBinopKind::Range,
+            Token::DotDotEq => PBinopKind::RangeInclusive,
+            Token::DotDot => PBinopKind::RangeExclusive,
             Token::Equals => PBinopKind::Assign,
             Token::PipeShort => PBinopKind::OrCircuit,
             Token::AndShort => PBinopKind::AndCircuit,

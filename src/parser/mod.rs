@@ -35,7 +35,11 @@ pub fn parse_mod(ctx: &dyn AdelaideContext, file_id: Id<AFile>) -> AResult<Id<PM
         .map_err(|e| map_parse_error(file_id, e))?;
     items.extend(parsed_items);
 
-    Ok(PModule { file_id, items }.intern(ctx))
+    Ok(PModule {
+        file_id: file_id.into(),
+        items,
+    }
+    .intern(ctx))
 }
 
 fn map_parse_error(file_id: Id<AFile>, error: ParseError<usize, Token, AError>) -> AError {
@@ -44,11 +48,11 @@ fn map_parse_error(file_id: Id<AFile>, error: ParseError<usize, Token, AError>) 
         ParseError::UnrecognizedToken {
             token: (l, t, h),
             expected,
-        } => AError::ParseError(
+        } => AError::SpanError(
             Span(file_id, l, h),
             format!("Unexpected token {}, expected {}", t, CommaSep(expected)),
         ),
-        ParseError::UnrecognizedEOF { location, expected } => AError::ParseError(
+        ParseError::UnrecognizedEOF { location, expected } => AError::SpanError(
             Span(file_id, location.saturating_sub(1), location),
             format!("Unexpected EOF, expected {}", CommaSep(expected)),
         ),
