@@ -245,7 +245,7 @@ ObjectMembers: PObjectMembers = {
 };
 
 NamedObjectMember: (Span, Id<str>, Id<PType>) = {
-    <l:@L> <i:Identifier> <h:@R> <t:Type> =>
+    <l:@L> <i:Identifier> <h:@R> ":" <t:Type> =>
         (Span(file, l, h), i, t),
 };
 
@@ -284,9 +284,9 @@ TraitMembers = {
 TraitMember: PTraitMember = {
     "type" <l:@L> <t:TypeName> <h:@R> <r:MaybeTraitTypeRestriction> "." =>
         PTraitMember::type_member(Span(file, l, h), t, r),
-    "fn" <l:@L> <i:Identifier> <h:@R> <g:MaybeDeclGenerics> <p:DeclObjectParams> <r:MaybeReturn> <w:MaybeRestrictions> =>
+    "fn" <l:@L> <i:Identifier> <h:@R> <g:MaybeDeclGenerics> <p:DeclObjectParams> <r:MaybeReturn> <w:MaybeRestrictions> "." =>
         PTraitMember::function_member(Span(file, l, h), i, g, p.0, p.1, r, w),
-    "async" "fn" <l:@L> <i:Identifier> <h:@R> <g:MaybeDeclGenerics> <p:DeclObjectParams> <r:MaybeReturn> <w:MaybeRestrictions> => {
+    "async" "fn" <l:@L> <i:Identifier> <h:@R> <g:MaybeDeclGenerics> <p:DeclObjectParams> <r:MaybeReturn> <w:MaybeRestrictions> "." => {
         let r = PType::awaitable(r.lookup(ctx).span, r).intern(ctx);
         PTraitMember::function_member(Span(file, l, h), i, g, p.0, p.1, r, w)
     }
