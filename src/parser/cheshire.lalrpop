@@ -54,7 +54,6 @@ extern {
         "%" => Token::Modulo,
 
         "use" => Token::Use,
-        "pub" => Token::Pub,
         "mod" => Token::Mod,
         "fn" => Token::Fn,
         "extern" => Token::Extern,
@@ -156,10 +155,8 @@ Item: PItem = {
 // --- Use --- //
 
 Use: Id<PUse> = {
-    <p:"pub"?> <l:@L> "use" <h:@R> "::" <u:UseElement> "." =>
-        PUse::new(Span(file, l, h), true, u).intern(ctx),
-    <p:"pub"?> <l:@L> "use" <h:@R> <u:UseElement> "." =>
-        PUse::new(Span(file, l, h), false, u).intern(ctx),
+    <l:@L> "use" <h:@R> <absolute:"::"?> <u:UseElement> "." =>
+        PUse::new(Span(file, l, h), absolute.is_some(), u).intern(ctx),
 };
 
 UseElement: Vec<PUseElement> = {

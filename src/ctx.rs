@@ -1,15 +1,21 @@
-use std::{cmp::Ordering, sync::Arc};
+use std::{
+    cmp::Ordering,
+    collections::{HashMap, VecDeque},
+    sync::{Arc, Mutex},
+};
 
 use codespan_reporting::files::Files;
 
 use crate::{
     file::AFile,
+    lexer::Span,
+    lowering::{LEarlyContext, LUseItem, LUseResult},
     parser::{
         PEnum, PExpression, PFunction, PGlobal, PImpl, PModule, PObject, PPattern, PStatement,
         PTrait, PTraitType, PType, PUse,
     },
     read::{RawFile, RawFileSource},
-    util::{AResult, Id},
+    util::{AResult, Id, Opaque},
 };
 
 #[salsa::query_group(AdelaideStorage)]
@@ -38,6 +44,9 @@ pub trait AdelaideContext: salsa::Database {
     fn lex_mod(&self, key: Id<AFile>) -> AResult<()>;
 
     // ------ PARSER ------ //
+
+    #[salsa::invoke(crate::parser::parsed_root)]
+    fn parsed_root(&self) -> AResult<Id<PModule>>;
 
     #[salsa::invoke(crate::parser::parse_mod)]
     fn parse_mod(&self, file_id: Id<AFile>) -> AResult<Id<PModule>>;
@@ -83,7 +92,34 @@ pub trait AdelaideContext: salsa::Database {
 
     // ------ LOWERING ------ //
 
-    // ...
+    #[salsa::invoke(crate::lowering::check_mod)]
+    fn check_mod(&self, key: Id<AFile>) -> AResult<()>;
+
+    // fn lower_mod(&self, key: Id<PModule>) -> AResult<Id<LModule>>;
+
+    #[salsa::invoke(crate::lowering::lower_mod_base)]
+    fn lower_mod_base(&self, key: Id<PModule>) -> AResult<Arc<LEarlyContext>>;
+
+    #[salsa::invoke(crate::lowering::early_lookup_ctx)]
+    fn early_lookup_ctx(&self) -> Opaque<Mutex<HashMap<(Id<PModule>, Id<str>), LUseResult>>>;
+
+    #[salsa::invoke(crate::lowering::lookup_item_early)]
+    fn lookup_item_early(
+        &self,
+        module: Id<PModule>,
+        path: VecDeque<(Span, Id<str>)>,
+    ) -> AResult<LUseItem>;
+
+    #[salsa::invoke(crate::lowering::mod_items)]
+    fn mod_items(&self, module: Id<PModule>) -> AResult<Arc<HashMap<Id<str>, LUseItem>>>;
+
+    // TODO: Could just reverse this path argument and use a Vec lol
+    #[salsa::invoke(crate::lowering::lookup_item)]
+    fn lookup_item(
+        &self,
+        module: Id<PModule>,
+        path: VecDeque<(Span, Id<str>)>,
+    ) -> AResult<(LUseItem, VecDeque<(Span, Id<str>)>)>;
 
     // ------ TYPECHECKER ------ //
 
@@ -93,6 +129,8 @@ pub trait AdelaideContext: salsa::Database {
 
     // ...
 }
+
+// ------ File Stuff ------ //
 
 fn line_starts(ctx: &dyn AdelaideContext, id: Id<AFile>) -> Arc<[usize]> {
     if let Some(source) = ctx.source(id) {

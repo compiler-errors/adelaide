@@ -47,7 +47,6 @@ pub enum Token {
 
     // Special keywords -- all are lowercase
     Use,
-    Pub,
     Mod,
     Fn,
     Extern,
@@ -148,7 +147,6 @@ impl Display for Token {
             Token::Slash => write!(f, "\"/\""),
             Token::Modulo => write!(f, "\"%\""),
             Token::Use => write!(f, "\"use\""),
-            Token::Pub => write!(f, "\"pub\""),
             Token::Mod => write!(f, "\"mod\""),
             Token::Fn => write!(f, "\"fn\""),
             Token::Extern => write!(f, "\"extern\""),

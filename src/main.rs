@@ -13,6 +13,7 @@ extern crate self as adelaide;
 mod ctx;
 mod file;
 mod lexer;
+mod lowering;
 mod parser;
 mod read;
 mod util;
@@ -37,6 +38,7 @@ enum Mode {
     Noop,
     Lex,
     Parse,
+    Check,
 }
 
 impl std::str::FromStr for Mode {
@@ -47,6 +49,7 @@ impl std::str::FromStr for Mode {
             "noop" | "n" => Ok(Mode::Noop),
             "lex" | "l" => Ok(Mode::Lex),
             "parse" | "p" => Ok(Mode::Parse),
+            "check" | "c" => Ok(Mode::Check),
             m => Err(format!("Invalid compiler mode `{}`", m)),
         }
     }
@@ -59,7 +62,13 @@ fn main() {
         let writer = StandardStream::stderr(ColorChoice::Always);
         let config = codespan_reporting::term::Config::default();
 
-        codespan_reporting::term::emit(&mut writer.lock(), &config, &ctx, &err.into()).unwrap();
+        codespan_reporting::term::emit(
+            &mut writer.lock(),
+            &config,
+            &ctx,
+            &err.into_diagnostic(&ctx),
+        )
+        .unwrap();
     }
 }
 
@@ -86,6 +95,9 @@ fn try_main(ctx: &mut AdelaideDatabase) -> AResult<()> {
         Mode::Parse => {
             let m = ctx.parse_mod(root)?;
             println!("{:#?}", Pretty(m, ctx))
+        },
+        Mode::Check => {
+            ctx.check_mod(root)?;
         },
     }
 

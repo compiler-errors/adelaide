@@ -33,8 +33,8 @@ pub fn read_file<'ctx>(
 
     let contents = if let Some(path) = &file.path {
         if path.is_file() {
-            let contents_raw = std::fs::read(&path).map_err(|e| map_io_error(file_id, e))?;
-            String::from_utf8(contents_raw).map_err(|e| map_utf8_error(file_id, e))?
+            let contents_raw = std::fs::read(&path).map_err(|e| map_io_error(ctx, file_id, e))?;
+            String::from_utf8(contents_raw).map_err(|e| map_utf8_error(ctx, file_id, e))?
         } else {
             "".to_string()
         }
@@ -45,10 +45,16 @@ pub fn read_file<'ctx>(
     Ok(Arc::new(RawFile { contents }))
 }
 
-fn map_io_error(file_id: Id<AFile>, e: std::io::Error) -> AError {
-    AError::IOErrorInFile(file_id, format!("{}", e))
+fn map_io_error(ctx: &dyn AdelaideContext, file_id: Id<AFile>, e: std::io::Error) -> AError {
+    let name = file_id.lookup(ctx).mod_path.join("::");
+    AError::IOErrorInFile(name, format!("{}", e))
 }
 
-fn map_utf8_error(file_id: Id<AFile>, e: std::string::FromUtf8Error) -> AError {
-    AError::Utf8Error(file_id, format!("{}", e))
+fn map_utf8_error(
+    ctx: &dyn AdelaideContext,
+    file_id: Id<AFile>,
+    e: std::string::FromUtf8Error,
+) -> AError {
+    let name = file_id.lookup(ctx).mod_path.join("::");
+    AError::Utf8Error(name, format!("{}", e))
 }

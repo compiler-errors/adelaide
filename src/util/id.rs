@@ -152,7 +152,7 @@ impl<T: Lookup + ?Sized> BackId<T> {
         self.0.set(id).expect("ID should only be initialized once");
     }
 
-    pub fn lookup(self, ctx: &dyn AdelaideContext) -> Arc<T> {
+    pub fn lookup(&self, ctx: &dyn AdelaideContext) -> Arc<T> {
         self.0
             .get()
             .expect("ID should be initialized by now")

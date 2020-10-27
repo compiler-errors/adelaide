@@ -15,8 +15,20 @@ use crate::{
     util::{AError, AResult, Id, Intern},
 };
 
+pub fn parsed_root(ctx: &dyn AdelaideContext) -> AResult<Id<PModule>> {
+    ctx.parse_mod(ctx.mod_tree_root())
+}
+
 pub fn parse_mod(ctx: &dyn AdelaideContext, file_id: Id<AFile>) -> AResult<Id<PModule>> {
     let raw_mod = ctx.read_file(file_id)?;
+
+    let span = Span(file_id, 0, 0);
+    let name = if let Some(name) = file_id.lookup(ctx).mod_path.last() {
+        name.intern(ctx)
+    } else {
+        // Root
+        "<root>".intern(ctx)
+    };
 
     let lexer = Lexer::new(ctx, file_id, &raw_mod.contents).map(|s| match s {
         // I absolutely hate the fact that I have to do this, but this is a limitation of LALRPOP.
@@ -37,6 +49,8 @@ pub fn parse_mod(ctx: &dyn AdelaideContext, file_id: Id<AFile>) -> AResult<Id<PM
 
     Ok(PModule {
         file_id: file_id.into(),
+        span,
+        name,
         items,
     }
     .intern(ctx))

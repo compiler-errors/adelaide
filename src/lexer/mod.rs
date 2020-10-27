@@ -5,6 +5,7 @@ use std::{
     str::Chars,
 };
 
+use codespan_reporting::diagnostic::Label;
 pub use token::*;
 
 use crate::{
@@ -51,6 +52,10 @@ impl Span {
     pub fn unite(self, other: Span) -> Span {
         assert!(self.0 == other.0, "Cannot unite span from two files");
         Span(self.0, min(self.1, other.1), max(self.2, other.2))
+    }
+
+    pub fn into_label(self) -> Label<Id<AFile>> {
+        Label::primary(self.0, (self.1)..(self.2))
     }
 }
 
@@ -618,7 +623,6 @@ impl<'input> Lexer<'input> {
             "_" => Token::Underscore,
 
             "use" => Token::Use,
-            "pub" => Token::Pub,
             "mod" => Token::Mod,
 
             "fn" => Token::Fn,

@@ -9,7 +9,7 @@ use crate::{
     util::{BackId, Id, Lookup},
 };
 
-#[derive(Debug, Hash, Eq, PartialEq, PrettyPrint)]
+#[derive(Copy, Clone, Debug, Hash, Eq, PartialEq, PrettyPrint)]
 pub enum PItem {
     Module(Id<PModule>),
     Use(Id<PUse>),
@@ -24,6 +24,8 @@ pub enum PItem {
 #[derive(Debug, Hash, Eq, PartialEq, PrettyPrint)]
 pub struct PModule {
     pub file_id: BackId<AFile>,
+    pub span: Span,
+    pub name: Id<str>,
     pub items: Vec<PItem>,
 }
 
@@ -39,9 +41,9 @@ impl Lookup for PModule {
 
 #[derive(Debug, Hash, Eq, PartialEq, PrettyPrint)]
 pub struct PUse {
-    span: Span,
-    absolute: bool,
-    elements: Vec<PUseElement>,
+    pub span: Span,
+    pub absolute: bool,
+    pub elements: Vec<PUseElement>,
 }
 
 impl Lookup for PUse {
@@ -122,13 +124,13 @@ impl Lookup for PGlobal {
 
 #[derive(Debug, Hash, Eq, PartialEq, PrettyPrint)]
 pub struct PFunction {
-    span: Span,
-    name: Id<str>,
-    generics: Vec<(Span, Id<str>)>,
-    parameters: Vec<(Span, Id<str>, Id<PType>)>,
-    return_ty: Id<PType>,
-    restrictions: Vec<(Id<PType>, Vec<Id<PTraitType>>)>,
-    body: Option<Id<PExpression>>,
+    pub span: Span,
+    pub name: Id<str>,
+    pub generics: Vec<(Span, Id<str>)>,
+    pub parameters: Vec<(Span, Id<str>, Id<PType>)>,
+    pub return_ty: Id<PType>,
+    pub restrictions: Vec<(Id<PType>, Vec<Id<PTraitType>>)>,
+    pub body: Option<Id<PExpression>>,
 }
 
 impl Lookup for PFunction {
@@ -165,12 +167,12 @@ impl PFunction {
 
 #[derive(Debug, Hash, Eq, PartialEq, PrettyPrint)]
 pub struct PObject {
-    is_structural: bool,
-    span: Span,
-    name: Id<str>,
-    generics: Vec<(Span, Id<str>)>,
-    restrictions: Vec<(Id<PType>, Vec<Id<PTraitType>>)>,
-    members: PObjectMembers,
+    pub is_structural: bool,
+    pub span: Span,
+    pub name: Id<str>,
+    pub generics: Vec<(Span, Id<str>)>,
+    pub restrictions: Vec<(Id<PType>, Vec<Id<PTraitType>>)>,
+    pub members: PObjectMembers,
 }
 
 impl Lookup for PObject {
@@ -212,11 +214,11 @@ pub enum PObjectMembers {
 
 #[derive(Debug, Hash, Eq, PartialEq, PrettyPrint)]
 pub struct PTrait {
-    span: Span,
-    name: Id<str>,
-    generics: Vec<(Span, Id<str>)>,
-    restrictions: Vec<(Id<PType>, Vec<Id<PTraitType>>)>,
-    members: Vec<PTraitMember>,
+    pub span: Span,
+    pub name: Id<str>,
+    pub generics: Vec<(Span, Id<str>)>,
+    pub restrictions: Vec<(Id<PType>, Vec<Id<PTraitType>>)>,
+    pub members: Vec<PTraitMember>,
 }
 
 impl Lookup for PTrait {
@@ -293,12 +295,12 @@ impl PTraitMember {
 
 #[derive(Debug, Hash, Eq, PartialEq, PrettyPrint)]
 pub struct PImpl {
-    span: Span,
-    generics: Vec<(Span, Id<str>)>,
-    ty: Id<PType>,
-    trait_ty: Option<Id<PTraitType>>,
-    restrictions: Vec<(Id<PType>, Vec<Id<PTraitType>>)>,
-    members: Vec<PImplMember>,
+    pub span: Span,
+    pub generics: Vec<(Span, Id<str>)>,
+    pub ty: Id<PType>,
+    pub trait_ty: Option<Id<PTraitType>>,
+    pub restrictions: Vec<(Id<PType>, Vec<Id<PTraitType>>)>,
+    pub members: Vec<PImplMember>,
 }
 
 impl Lookup for PImpl {
@@ -376,11 +378,11 @@ impl PImplMember {
 
 #[derive(Debug, Hash, Eq, PartialEq, PrettyPrint)]
 pub struct PEnum {
-    span: Span,
-    name: Id<str>,
-    generics: Vec<(Span, Id<str>)>,
-    restrictions: Vec<(Id<PType>, Vec<Id<PTraitType>>)>,
-    variants: Vec<(Span, Id<str>, PObjectMembers)>,
+    pub span: Span,
+    pub name: Id<str>,
+    pub generics: Vec<(Span, Id<str>)>,
+    pub restrictions: Vec<(Id<PType>, Vec<Id<PTraitType>>)>,
+    pub variants: Vec<(Span, Id<str>, PObjectMembers)>,
 }
 
 impl Lookup for PEnum {

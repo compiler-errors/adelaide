@@ -1,6 +1,7 @@
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, HashMap, VecDeque},
     fmt::{Debug, Formatter, Result},
+    sync::Arc,
 };
 
 use crate::ctx::AdelaideContext;
@@ -18,6 +19,12 @@ impl<'ctx, T: PrettyPrint> Debug for Pretty<'ctx, T> {
 }
 
 impl<T: PrettyPrint> PrettyPrint for &'_ T {
+    fn fmt(&self, f: &mut Formatter, ctx: &dyn AdelaideContext) -> Result {
+        <T as PrettyPrint>::fmt(self, f, ctx)
+    }
+}
+
+impl<T: PrettyPrint> PrettyPrint for Arc<T> {
     fn fmt(&self, f: &mut Formatter, ctx: &dyn AdelaideContext) -> Result {
         <T as PrettyPrint>::fmt(self, f, ctx)
     }
@@ -72,6 +79,18 @@ impl<K: PrettyPrint, V: PrettyPrint> PrettyPrint for BTreeMap<K, V> {
     }
 }
 
+impl<K: PrettyPrint, V: PrettyPrint> PrettyPrint for HashMap<K, V> {
+    fn fmt(&self, f: &mut Formatter, ctx: &dyn AdelaideContext) -> Result {
+        let mut h = f.debug_map();
+
+        for (k, v) in self {
+            h.entry(&Pretty(k, ctx), &Pretty(v, ctx));
+        }
+
+        h.finish()
+    }
+}
+
 macro_rules! simple_pretty {
     ($($ty:ty),*) => {$(
         impl PrettyPrint for $ty {
@@ -85,9 +104,8 @@ macro_rules! simple_pretty {
     }
 }
 
-simple_pretty!(bool, u64, char, str);
+simple_pretty!(bool, u64, char, str, String);
 simple_pretty!(std::path::PathBuf);
-simple_pretty!(crate::file::ModuleName);
 
 macro_rules! tuple_pretty {
     ($($ty:ident),*; $($idx:tt),*) => {
@@ -104,3 +122,4 @@ macro_rules! tuple_pretty {
 tuple_pretty!(A; 0);
 tuple_pretty!(A, B; 0, 1);
 tuple_pretty!(A, B, C; 0, 1, 2);
+tuple_pretty!(A, B, C, D; 0, 1, 2, 3);

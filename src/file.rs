@@ -6,7 +6,6 @@ use lazy_static::lazy_static;
 use regex::Regex;
 use std::{
     collections::BTreeMap,
-    convert::{TryFrom, TryInto},
     ffi::OsStr,
     path::{Path, PathBuf},
     sync::Arc,
@@ -16,44 +15,18 @@ lazy_static! {
     static ref MODULE_NAME_REGEX: Regex = Regex::new(r"^[a-z][a-zA-Z0-9_]*$").unwrap();
 }
 
-#[derive(Debug, Hash, Clone, Ord, PartialOrd, Eq, PartialEq)]
-pub struct ModuleName(String);
-impl TryFrom<String> for ModuleName {
-    type Error = AError;
-
-    fn try_from(value: String) -> AResult<ModuleName> {
-        if MODULE_NAME_REGEX.is_match(&value) {
-            Ok(ModuleName(value))
-        } else {
-            Err(AError::InvalidModuleError(value))
-        }
-    }
-}
-
-impl Into<String> for ModuleName {
-    fn into(self) -> String {
-        self.0
-    }
-}
-
-impl std::fmt::Display for ModuleName {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
 #[derive(Debug, Hash, Eq, PartialEq, PrettyPrint)]
 pub struct AFile {
     pub path: Option<PathBuf>,
-    pub mod_path: Vec<ModuleName>,
-    pub children: BTreeMap<ModuleName, Id<AFile>>,
+    pub mod_path: Vec<String>,
+    pub children: BTreeMap<String, Id<AFile>>,
 }
 
 pub fn initialize_from_path_arguments(
     ctx: &mut dyn AdelaideContext,
     input: Vec<String>,
 ) -> AResult<()> {
-    let mut children: BTreeMap<ModuleName, Id<AFile>> = btreemap! {};
+    let mut children: BTreeMap<String, Id<AFile>> = btreemap! {};
 
     for child_name in input {
         debug!("Initializing child: {:?}", child_name);
@@ -79,7 +52,7 @@ pub fn initialize_from_path_arguments(
 
 pub fn initialize_child(
     ctx: &mut dyn AdelaideContext,
-    mod_path: &[ModuleName],
+    mod_path: &[String],
     my_path: PathBuf,
 ) -> AResult<Id<AFile>> {
     if !is_valid_mod(my_path.as_path()) {
@@ -97,26 +70,38 @@ pub fn initialize_child(
         itertools::join(&mod_path, ":")
     );
 
+    let mut file_path = None;
+
     if my_path.is_dir() {
         let my_path = &my_path;
 
         for child in std::fs::read_dir(my_path).map_err(|e| map_io_error(my_path, e))? {
-            let child_path = child.map_err(|e| map_io_error(&my_path, e))?.path();
+            let child = child.map_err(|e| map_io_error(&my_path, e))?;
+            let child_path = child.path();
 
             if is_valid_mod(&child_path) {
                 let mod_name = expect_mod_name(child_path.file_stem())?;
-                children.insert(mod_name, initialize_child(ctx, &mod_path, child_path)?);
+
+                if mod_name == "mod" {
+                    if !child.path().is_file() {
+                        todo!("Error!")
+                    }
+
+                    file_path = Some(child_path);
+                } else {
+                    children.insert(mod_name, initialize_child(ctx, &mod_path, child_path)?);
+                }
             }
         }
+    } else if my_path.is_file() {
+        file_path = Some(my_path);
+    } else {
+        unreachable!()
     }
 
     let file_id = AFile {
         // It doesn't hurt to keep the dir path
-        path: if my_path.is_file() {
-            Some(my_path)
-        } else {
-            None
-        },
+        path: file_path,
         mod_path,
         children,
     }
@@ -147,10 +132,10 @@ fn is_valid_extension(extension: &OsStr) -> bool {
     extension == "ch"
 }
 
-fn expect_mod_name(name: Option<&OsStr>) -> AResult<ModuleName> {
+fn expect_mod_name(name: Option<&OsStr>) -> AResult<String> {
     if let Some(module_name) = name.and_then(OsStr::to_str) {
         if MODULE_NAME_REGEX.is_match(module_name) {
-            return module_name.to_owned().try_into();
+            return Ok(module_name.to_owned());
         }
     }
 
