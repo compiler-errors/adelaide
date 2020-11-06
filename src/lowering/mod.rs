@@ -370,13 +370,13 @@ pub struct LFunction {
 impl LateLookup for LFunction {
     type Source = PFunction;
 
-    fn late_lookup(id: &LId<Self>, ctx: &dyn AdelaideContext) -> Id<Self> {
-        let source = id.0.lookup(ctx);
+    fn late_lookup(id: Id<Self::Source>, ctx: &dyn AdelaideContext) -> Id<Self> {
+        let source = id.lookup(ctx);
         *ctx.lower_mod(source.parent.get())
             .unwrap()
             .lookup(ctx)
             .functions
-            .get(&id.0)
+            .get(&id)
             .unwrap()
     }
 }
@@ -390,13 +390,13 @@ pub struct LObject {
 impl LateLookup for LObject {
     type Source = PObject;
 
-    fn late_lookup(id: &LId<Self>, ctx: &dyn AdelaideContext) -> Id<Self> {
-        let source = id.0.lookup(ctx);
+    fn late_lookup(id: Id<Self::Source>, ctx: &dyn AdelaideContext) -> Id<Self> {
+        let source = id.lookup(ctx);
         *ctx.lower_mod(source.parent.get())
             .unwrap()
             .lookup(ctx)
             .objects
-            .get(&id.0)
+            .get(&id)
             .unwrap()
     }
 }
@@ -407,13 +407,13 @@ pub struct LEnum {}
 impl LateLookup for LEnum {
     type Source = PEnum;
 
-    fn late_lookup(id: &LId<Self>, ctx: &dyn AdelaideContext) -> Id<Self> {
-        let source = id.0.lookup(ctx);
+    fn late_lookup(id: Id<Self::Source>, ctx: &dyn AdelaideContext) -> Id<Self> {
+        let source = id.lookup(ctx);
         *ctx.lower_mod(source.parent.get())
             .unwrap()
             .lookup(ctx)
             .enums
-            .get(&id.0)
+            .get(&id)
             .unwrap()
     }
 }
@@ -424,13 +424,13 @@ pub struct LTrait {}
 impl LateLookup for LTrait {
     type Source = PTrait;
 
-    fn late_lookup(id: &LId<Self>, ctx: &dyn AdelaideContext) -> Id<Self> {
-        let source = id.0.lookup(ctx);
+    fn late_lookup(id: Id<Self::Source>, ctx: &dyn AdelaideContext) -> Id<Self> {
+        let source = id.lookup(ctx);
         *ctx.lower_mod(source.parent.get())
             .unwrap()
             .lookup(ctx)
             .traits
-            .get(&id.0)
+            .get(&id)
             .unwrap()
     }
 }
@@ -441,13 +441,13 @@ pub struct LImpl {}
 impl LateLookup for LImpl {
     type Source = PImpl;
 
-    fn late_lookup(id: &LId<Self>, ctx: &dyn AdelaideContext) -> Id<Self> {
-        let source = id.0.lookup(ctx);
+    fn late_lookup(id: Id<Self::Source>, ctx: &dyn AdelaideContext) -> Id<Self> {
+        let source = id.lookup(ctx);
         *ctx.lower_mod(source.parent.get())
             .unwrap()
             .lookup(ctx)
             .impls
-            .get(&id.0)
+            .get(&id)
             .unwrap()
     }
 }

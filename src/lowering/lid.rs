@@ -11,7 +11,7 @@ pub struct LId<T: LateLookup + ?Sized>(pub Id<T::Source>, SyncOnceCell<Id<T>>);
 impl<T: LateLookup + Lookup + ?Sized> LId<T> {
     fn lookup(self, ctx: &dyn AdelaideContext) -> Arc<T> {
         self.1
-            .get_or_init(|| T::late_lookup(&self, ctx))
+            .get_or_init(|| T::late_lookup(self.0, ctx))
             .lookup(ctx)
     }
 }
@@ -19,7 +19,7 @@ impl<T: LateLookup + Lookup + ?Sized> LId<T> {
 pub trait LateLookup {
     type Source;
 
-    fn late_lookup(id: &LId<Self>, ctx: &dyn AdelaideContext) -> Id<Self>;
+    fn late_lookup(id: Id<Self::Source>, ctx: &dyn AdelaideContext) -> Id<Self>;
 }
 
 impl<T: LateLookup + ?Sized> From<Id<T::Source>> for LId<T> {
