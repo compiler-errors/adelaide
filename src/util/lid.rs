@@ -5,14 +5,17 @@ use crate::{
     util::{Id, Lookup, PrettyPrint},
 };
 
-#[derive(Clone)]
 pub struct LId<T: LateLookup + ?Sized>(pub Id<T::Source>, SyncOnceCell<Id<T>>);
 
 impl<T: LateLookup + Lookup + ?Sized> LId<T> {
-    fn lookup(self, ctx: &dyn AdelaideContext) -> Arc<T> {
+    pub fn lookup(&self, ctx: &dyn AdelaideContext) -> Arc<T> {
         self.1
             .get_or_init(|| T::late_lookup(self.0, ctx))
             .lookup(ctx)
+    }
+
+    pub fn get(&self, ctx: &dyn AdelaideContext) -> Id<T> {
+        *self.1.get_or_init(|| T::late_lookup(self.0, ctx))
     }
 }
 
@@ -25,6 +28,12 @@ pub trait LateLookup {
 impl<T: LateLookup + ?Sized> From<Id<T::Source>> for LId<T> {
     fn from(s: Id<T::Source>) -> Self {
         LId(s, SyncOnceCell::new())
+    }
+}
+
+impl<T: LateLookup + ?Sized> Clone for LId<T> {
+    fn clone(&self) -> Self {
+        LId(self.0, self.1.clone())
     }
 }
 

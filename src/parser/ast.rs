@@ -6,7 +6,7 @@ use crate::{
     ctx::AdelaideContext,
     file::AFile,
     lexer::{Span, Token},
-    util::{BackId, Id, Lookup},
+    util::{Id, LId, LateLookup, Lookup},
 };
 
 #[derive(Copy, Clone, Debug, Hash, Eq, PartialEq, PrettyPrint)]
@@ -24,27 +24,14 @@ pub enum PItem {
 impl PItem {
     pub fn parent(self, ctx: &dyn AdelaideContext) -> Id<PModule> {
         match self {
-            PItem::Module(m) => m.lookup(ctx).parent.get(),
-            PItem::Use(u) => u.lookup(ctx).parent.get(),
-            PItem::Global(g) => g.lookup(ctx).parent.get(),
-            PItem::Function(f) => f.lookup(ctx).parent.get(),
-            PItem::Object(o) => o.lookup(ctx).parent.get(),
-            PItem::Enum(e) => e.lookup(ctx).parent.get(),
-            PItem::Trait(t) => t.lookup(ctx).parent.get(),
-            PItem::Impl(i) => i.lookup(ctx).parent.get(),
-        }
-    }
-
-    pub fn link_parent(self, ctx: &dyn AdelaideContext, parent: Id<PModule>) {
-        match self {
-            PItem::Module(m) => m.lookup(ctx).parent.set(parent),
-            PItem::Use(u) => u.lookup(ctx).parent.set(parent),
-            PItem::Global(g) => g.lookup(ctx).parent.set(parent),
-            PItem::Function(f) => f.lookup(ctx).parent.set(parent),
-            PItem::Object(o) => o.lookup(ctx).parent.set(parent),
-            PItem::Enum(e) => e.lookup(ctx).parent.set(parent),
-            PItem::Trait(t) => t.lookup(ctx).parent.set(parent),
-            PItem::Impl(i) => i.lookup(ctx).parent.set(parent),
+            PItem::Module(m) => m.lookup(ctx).parent.get(ctx),
+            PItem::Use(u) => u.lookup(ctx).parent.get(ctx),
+            PItem::Global(g) => g.lookup(ctx).parent.get(ctx),
+            PItem::Function(f) => f.lookup(ctx).parent.get(ctx),
+            PItem::Object(o) => o.lookup(ctx).parent.get(ctx),
+            PItem::Enum(e) => e.lookup(ctx).parent.get(ctx),
+            PItem::Trait(t) => t.lookup(ctx).parent.get(ctx),
+            PItem::Impl(i) => i.lookup(ctx).parent.get(ctx),
         }
     }
 }
@@ -53,24 +40,37 @@ impl PItem {
 pub struct PModule {
     #[plain]
     pub source: Id<AFile>,
-    pub parent: BackId<PModule>,
+    pub parent: LId<PModule>,
     pub span: Span,
     pub name: Id<str>,
     pub items: Vec<PItem>,
 }
 
+impl LateLookup for PModule {
+    type Source = AFile;
+
+    fn late_lookup(id: Id<Self::Source>, ctx: &dyn AdelaideContext) -> Id<Self> {
+        ctx.parse_mod(id).unwrap()
+    }
+}
+
 #[derive(Debug, Hash, Eq, PartialEq, Lookup, PrettyPrint)]
 pub struct PUse {
-    pub parent: BackId<PModule>,
+    pub parent: LId<PModule>,
     pub span: Span,
     pub absolute: bool,
     pub elements: Vec<PUseElement>,
 }
 
 impl PUse {
-    pub fn new(span: Span, absolute: bool, elements: Vec<PUseElement>) -> PUse {
+    pub fn new(
+        span: Span,
+        parent: LId<PModule>,
+        absolute: bool,
+        elements: Vec<PUseElement>,
+    ) -> PUse {
         PUse {
-            parent: BackId::new(),
+            parent,
             span,
             absolute,
             elements,
@@ -114,9 +114,15 @@ impl PUseElement {
 }
 
 impl PGlobal {
-    pub fn new(span: Span, name: Id<str>, ty: Id<PType>, expr: Id<PExpression>) -> PGlobal {
+    pub fn new(
+        span: Span,
+        parent: LId<PModule>,
+        name: Id<str>,
+        ty: Id<PType>,
+        expr: Id<PExpression>,
+    ) -> PGlobal {
         PGlobal {
-            parent: BackId::new(),
+            parent,
             span,
             name,
             ty,
@@ -127,7 +133,7 @@ impl PGlobal {
 
 #[derive(Debug, Hash, Eq, PartialEq, Lookup, PrettyPrint)]
 pub struct PFunction {
-    pub parent: BackId<PModule>,
+    pub parent: LId<PModule>,
     pub span: Span,
     pub name: Id<str>,
     pub generics: Vec<(Span, Id<str>)>,
@@ -140,6 +146,7 @@ pub struct PFunction {
 impl PFunction {
     pub fn new(
         span: Span,
+        parent: LId<PModule>,
         name: Id<str>,
         generics: Vec<(Span, Id<str>)>,
         parameters: Vec<(Span, Id<str>, Id<PType>)>,
@@ -148,7 +155,7 @@ impl PFunction {
         body: Option<Id<PExpression>>,
     ) -> PFunction {
         PFunction {
-            parent: BackId::new(),
+            parent,
             span,
             name,
             generics,
@@ -162,7 +169,7 @@ impl PFunction {
 
 #[derive(Debug, Hash, Eq, PartialEq, Lookup, PrettyPrint)]
 pub struct PObject {
-    pub parent: BackId<PModule>,
+    pub parent: LId<PModule>,
     pub is_structural: bool,
     pub span: Span,
     pub name: Id<str>,
@@ -175,13 +182,14 @@ impl PObject {
     pub fn new(
         is_structural: bool,
         span: Span,
+        parent: LId<PModule>,
         name: Id<str>,
         generics: Vec<(Span, Id<str>)>,
         restrictions: Vec<(Id<PType>, Vec<Id<PTraitType>>)>,
         members: PObjectMembers,
     ) -> PObject {
         PObject {
-            parent: BackId::new(),
+            parent,
             is_structural,
             span,
             name,
@@ -201,7 +209,7 @@ pub enum PObjectMembers {
 
 #[derive(Debug, Hash, Eq, PartialEq, Lookup, PrettyPrint)]
 pub struct PTrait {
-    pub parent: BackId<PModule>,
+    pub parent: LId<PModule>,
     pub span: Span,
     pub name: Id<str>,
     pub generics: Vec<(Span, Id<str>)>,
@@ -212,13 +220,14 @@ pub struct PTrait {
 impl PTrait {
     pub fn new(
         span: Span,
+        parent: LId<PModule>,
         name: Id<str>,
         generics: Vec<(Span, Id<str>)>,
         restrictions: Vec<(Id<PType>, Vec<Id<PTraitType>>)>,
         members: Vec<PTraitMember>,
     ) -> PTrait {
         PTrait {
-            parent: BackId::new(),
+            parent,
             span,
             name,
             generics,
@@ -274,7 +283,7 @@ impl PTraitMember {
 
 #[derive(Debug, Hash, Eq, PartialEq, Lookup, PrettyPrint)]
 pub struct PImpl {
-    pub parent: BackId<PModule>,
+    pub parent: LId<PModule>,
     pub span: Span,
     pub generics: Vec<(Span, Id<str>)>,
     pub ty: Id<PType>,
@@ -286,6 +295,7 @@ pub struct PImpl {
 impl PImpl {
     pub fn new(
         span: Span,
+        parent: LId<PModule>,
         generics: Vec<(Span, Id<str>)>,
         ty: Id<PType>,
         trait_ty: Option<Id<PTraitType>>,
@@ -293,7 +303,7 @@ impl PImpl {
         members: Vec<PImplMember>,
     ) -> PImpl {
         PImpl {
-            parent: BackId::new(),
+            parent,
             span,
             generics,
             ty,
@@ -349,7 +359,7 @@ impl PImplMember {
 
 #[derive(Debug, Hash, Eq, PartialEq, Lookup, PrettyPrint)]
 pub struct PEnum {
-    pub parent: BackId<PModule>,
+    pub parent: LId<PModule>,
     pub span: Span,
     pub name: Id<str>,
     pub generics: Vec<(Span, Id<str>)>,
@@ -360,13 +370,14 @@ pub struct PEnum {
 impl PEnum {
     pub fn new(
         span: Span,
+        parent: LId<PModule>,
         name: Id<str>,
         generics: Vec<(Span, Id<str>)>,
         restrictions: Vec<(Id<PType>, Vec<Id<PTraitType>>)>,
         variants: Vec<(Span, Id<str>, PObjectMembers)>,
     ) -> PEnum {
         PEnum {
-            parent: BackId::new(),
+            parent,
             span,
             name,
             generics,
@@ -571,7 +582,7 @@ impl PTraitType {
 
 #[derive(Debug, Hash, Eq, PartialEq, Lookup, PrettyPrint)]
 pub struct PGlobal {
-    pub parent: BackId<PModule>,
+    pub parent: LId<PModule>,
     pub span: Span,
     pub name: Id<str>,
     pub ty: Id<PType>,

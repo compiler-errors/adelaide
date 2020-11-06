@@ -13,10 +13,10 @@ use crate::{
     ctx::AdelaideContext,
     file::AFile,
     lexer::{Lexer, Span, SpanToken, Token},
-    util::{AError, AResult, BackId, Id, Intern},
+    util::{AError, AResult, Id, Intern, LId},
 };
 
-pub fn parsed_root(ctx: &dyn AdelaideContext) -> AResult<Id<PModule>> {
+pub fn parse_root(ctx: &dyn AdelaideContext) -> AResult<Id<PModule>> {
     ctx.parse_mod(ctx.mod_tree_root())
 }
 
@@ -48,19 +48,16 @@ pub fn parse_mod(ctx: &dyn AdelaideContext, file_id: Id<AFile>) -> AResult<Id<PM
         .map_err(|e| map_parse_error(file_id, e))?;
     items.extend(parsed_items);
 
+    let parent = ctx.mod_parent(file_id);
+
     let m = PModule {
         source: file_id,
-        parent: BackId::new(),
+        parent: parent.into(),
         span,
         name,
         items,
     }
     .intern(ctx);
-
-    // Link all the BackId's in the module
-    for i in &m.lookup(ctx).items {
-        i.link_parent(ctx, m);
-    }
 
     Ok(m)
 }

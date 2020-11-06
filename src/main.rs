@@ -93,11 +93,11 @@ fn try_main(ctx: &mut AdelaideDatabase) -> AResult<()> {
             ctx.lex_mod(root)?;
         },
         Mode::Parse => {
-            let m = ctx.parse_mod(root)?;
+            let m = ctx.parse_root()?;
             println!("{:#?}", Pretty(m, ctx))
         },
         Mode::Check => {
-            ctx.check_mod(root)?;
+            ctx.check_root()?;
         },
     }
 

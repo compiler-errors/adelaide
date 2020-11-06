@@ -18,13 +18,16 @@ use crate::{
         PTrait, PTraitType, PType, PUse,
     },
     read::{RawFile, RawFileSource},
-    util::{AResult, Id, Opaque},
+    util::{AResult, Id, LId, Opaque},
 };
 
 #[salsa::query_group(AdelaideStorage)]
 pub trait AdelaideContext: salsa::Database {
     #[salsa::input]
     fn mod_tree_root(&self) -> Id<AFile>;
+
+    #[salsa::invoke(crate::file::mod_parent)]
+    fn mod_parent(&self, key: Id<AFile>) -> Id<AFile>;
 
     fn line_starts(&self, key: Id<AFile>) -> Arc<[usize]>;
 
@@ -48,8 +51,8 @@ pub trait AdelaideContext: salsa::Database {
 
     // ------ PARSER ------ //
 
-    #[salsa::invoke(crate::parser::parsed_root)]
-    fn parsed_root(&self) -> AResult<Id<PModule>>;
+    #[salsa::invoke(crate::parser::parse_root)]
+    fn parse_root(&self) -> AResult<Id<PModule>>;
 
     #[salsa::invoke(crate::parser::parse_mod)]
     fn parse_mod(&self, file_id: Id<AFile>) -> AResult<Id<PModule>>;
@@ -96,7 +99,7 @@ pub trait AdelaideContext: salsa::Database {
     // ------ LOWERING ------ //
 
     #[salsa::invoke(crate::lowering::check_mod)]
-    fn check_mod(&self, key: Id<AFile>) -> AResult<()>;
+    fn check_root(&self) -> AResult<()>;
 
     #[salsa::invoke(crate::lowering::lower_mod)]
     fn lower_mod(&self, key: Id<PModule>) -> AResult<Id<LModule>>;

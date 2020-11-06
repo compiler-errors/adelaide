@@ -212,7 +212,7 @@ fn lookup_item_early_deep(
     mut path: VecDeque<(Span, Id<str>)>,
     seen: &mut HashMap<(Id<PModule>, Id<str>), LUseResult>,
 ) -> LUseResult {
-    let parsed_root = ctx.parsed_root()?;
+    let parse_root = ctx.parse_root()?;
     assert!(!path.is_empty(), "Cannot lookup an empty path!");
 
     while !path.is_empty() || matches!(current_item, LUseItem::Imported { .. }) {
@@ -287,7 +287,7 @@ fn lookup_item_early_deep(
                             } else {
                                 current_item = lookup_item_early_deep(
                                     ctx,
-                                    LUseItem::Module(parsed_root),
+                                    LUseItem::Module(parse_root),
                                     vec![(span, name)].into(),
                                     seen,
                                 )
@@ -340,12 +340,7 @@ pub fn lookup_item_early_deep_relative(
         None
     };
 
-    match lookup_item_early_deep(
-        ctx,
-        LUseItem::Module(ctx.parsed_root()?),
-        path.clone(),
-        seen,
-    ) {
+    match lookup_item_early_deep(ctx, LUseItem::Module(ctx.parse_root()?), path.clone(), seen) {
         Ok(i) => Ok(i),
         Err(e) => Err(original_error.unwrap_or(e)),
     }
@@ -406,7 +401,7 @@ fn mod_items_deep(
     ctx: &dyn AdelaideContext,
     item: LUseItem,
 ) -> AResult<()> {
-    let parsed_root = ctx.parsed_root()?;
+    let parse_root = ctx.parse_root()?;
 
     match item {
         LUseItem::Module(module) => {
@@ -425,7 +420,7 @@ fn mod_items_deep(
                         name,
                         in_module: _,
                     } => {
-                        let base = base.unwrap_or(parsed_root);
+                        let base = base.unwrap_or(parse_root);
                         let item = ctx.lookup_item_early(base, path.clone())?;
                         insert_late_item(items, blame_spans, ctx, *name, *span, item.into())?;
                     },
@@ -443,7 +438,7 @@ fn mod_items_deep(
                 }
 
                 for (relative, path, _) in &info.full_imports {
-                    let base = relative.unwrap_or(parsed_root);
+                    let base = relative.unwrap_or(parse_root);
                     let item = ctx.lookup_item_early(base, path.clone())?;
                     mod_items_deep(items, blame_spans, visited, ctx, item)?;
                 }
@@ -498,10 +493,8 @@ pub fn lookup_item(
 
 /// --- Temporary testing code --- ///
 
-pub fn check_mod(ctx: &dyn AdelaideContext, key: Id<AFile>) -> AResult<()> {
-    let parsed_root = ctx.parse_mod(key)?;
-
-    lower_test_single(ctx, parsed_root)
+pub fn check_mod(ctx: &dyn AdelaideContext) -> AResult<()> {
+    lower_test_single(ctx, ctx.parse_root()?)
 }
 
 fn lower_test_single(ctx: &dyn AdelaideContext, key: Id<PModule>) -> AResult<()> {

@@ -156,7 +156,7 @@ Item: PItem = {
 
 Use: Id<PUse> = {
     <l:@L> "use" <h:@R> <absolute:"::"?> <u:UseElement> "." =>
-        PUse::new(Span(file, l, h), absolute.is_some(), u).intern(ctx),
+        PUse::new(Span(file, l, h), file.into(), absolute.is_some(), u).intern(ctx),
 };
 
 UseElement: Vec<PUseElement> = {
@@ -185,20 +185,20 @@ MaybeRename<T>: Option<(Span, T)> = {
 
 Global: Id<PGlobal> = {
     "let" <l:@L> <i:Identifier> <h:@R> ":" <t:Type> "=" <e:Expression> "."+ =>
-        PGlobal::new(Span(file, l, h), i, t, e).intern(ctx),
+        PGlobal::new(Span(file, l, h), file.into(), i, t, e).intern(ctx),
 };
 
 // --- Function --- //
 
 Function: Id<PFunction> = {
     "extern" "fn" <l:@L> <i:Identifier> <h:@R> <g:MaybeDeclGenerics> <p:DeclParams> <r:MaybeReturn> <w:MaybeRestrictions> "." =>
-        PFunction::new(Span(file, l, h), i, g, p, r, w, None).intern(ctx),
+        PFunction::new(Span(file, l, h), file.into(),i, g, p, r, w, None).intern(ctx),
     "fn" <l:@L> <i:Identifier> <h:@R> <g:MaybeDeclGenerics> <p:DeclParams> <r:MaybeReturn> <w:MaybeRestrictions> "=" <e:Expression> "." =>
-        PFunction::new(Span(file, l, h), i, g, p, r, w, Some(e)).intern(ctx),
+        PFunction::new(Span(file, l, h), file.into(), i, g, p, r, w, Some(e)).intern(ctx),
     "async" "fn" <l:@L> <i:Identifier> <h:@R> <g:MaybeDeclGenerics> <p:DeclParams> <r:MaybeReturn> <w:MaybeRestrictions> "=" <e:Expression> "." => {
         let r = PType::awaitable(r.lookup(ctx).span, r).intern(ctx);
         let e = PExpression::async_block(e.lookup(ctx).span, e).intern(ctx);
-        PFunction::new(Span(file, l, h), i, g, p, r, w, Some(e)).intern(ctx)
+        PFunction::new(Span(file, l, h), file.into(), i, g, p, r, w, Some(e)).intern(ctx)
     },
 };
 
@@ -230,9 +230,9 @@ MaybeRestrictions: Vec<(Id<PType>, Vec<Id<PTraitType>>)> = {
 
 Object: Id<PObject> = {
     "object" <l:@L> <t:TypeName> <h:@R> <g:MaybeDeclGenerics> <r:MaybeRestrictions> <o:ObjectMembers> =>
-        PObject::new(false, Span(file, l, h), t, g, r, o).intern(ctx),
+        PObject::new(false, Span(file, l, h), file.into(), t, g, r, o).intern(ctx),
     "struct" <l:@L> <t:TypeName> <h:@R> <g:MaybeDeclGenerics> <r:MaybeRestrictions> <o:ObjectMembers> =>
-        PObject::new(true, Span(file, l, h), t, g, r, o).intern(ctx),
+        PObject::new(true, Span(file, l, h), file.into(), t, g, r, o).intern(ctx),
 };
 
 ObjectMembers: PObjectMembers = {
@@ -253,7 +253,7 @@ NamedObjectMember: (Span, Id<str>, Id<PType>) = {
 
 Enum: Id<PEnum> = {
     "enum" <l:@L> <t:TypeName> <h:@R> <g:MaybeDeclGenerics> <r:MaybeRestrictions> "{" <v:CommaTrailingOrEmpty<EnumVariant>> "}" =>
-        PEnum::new(Span(file, l, h), t, g, r, v).intern(ctx),
+        PEnum::new(Span(file, l, h), file.into(), t, g, r, v).intern(ctx),
 };
 
 EnumVariant: (Span, Id<str>, PObjectMembers) = {
@@ -274,7 +274,7 @@ EnumMembers: PObjectMembers = {
 
 Trait: Id<PTrait> = {
     "trait" <l:@L> <t:TypeName> <h:@R> <g:MaybeDeclGenerics> <w:MaybeRestrictions> <m:TraitMembers> =>
-        PTrait::new(Span(file, l, h), t, g, w, m).intern(ctx),
+        PTrait::new(Span(file, l, h), file.into(), t, g, w, m).intern(ctx),
 };
 
 TraitMembers = {
@@ -310,9 +310,9 @@ DeclObjectParams: (bool, Vec<(Span, Id<str>, Id<PType>)>) = {
 
 Impl: Id<PImpl> = {
     <l:@L> "impl" <h:@R> <g:MaybeDeclGenerics> <tr:TraitType> "for" <t:Type> <r:MaybeRestrictions>  "{" <m:(ImplMember)*> "}" =>
-        PImpl::new(Span(file, l, h), g, t, Some(tr), r, m).intern(ctx),
+        PImpl::new(Span(file, l, h), file.into(), g, t, Some(tr), r, m).intern(ctx),
     <l:@L> "impl" <h:@R> <g:MaybeDeclGenerics> "Self" "for" <t:Type> <r:MaybeRestrictions>  "{" <m:(ImplMember)*> "}" =>
-        PImpl::new(Span(file, l, h), g, t, None, r, m).intern(ctx),
+        PImpl::new(Span(file, l, h), file.into(), g, t, None, r, m).intern(ctx),
 };
 
 ImplMember: PImplMember = {

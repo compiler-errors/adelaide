@@ -1,4 +1,3 @@
-mod lid;
 mod uses;
 
 use std::{
@@ -16,15 +15,13 @@ use crate::{
         PEnum, PExpression, PFunction, PGlobal, PImpl, PModule, PObject, PTrait, PTraitType, PType,
         PTypeData,
     },
-    util::{AError, AResult, Id, Intern},
+    util::{AError, AResult, Id, Intern, LId, LateLookup},
 };
 
 pub use uses::{
     check_mod, early_lookup_ctx, local_mod_items, lookup_item, lookup_item_early, lower_mod_base,
     mod_items, LEarlyContext, LUseError, LUseItem, LUseResult,
 };
-
-use self::lid::{LId, LateLookup};
 
 static INFER_IDS: AtomicUsize = AtomicUsize::new(0);
 
@@ -93,8 +90,9 @@ impl<'ctx> LoweringContext<'ctx> {
 
     fn lookup_std_item(&self, name: &str) -> LScopeItem {
         // We expect none of these results to be an error, so just unwrap them.
-        *self.ctx
-            .mod_items(self.ctx.parsed_root().unwrap())
+        *self
+            .ctx
+            .mod_items(self.ctx.parse_root().unwrap())
             .unwrap()
             .get(&name.intern(self.ctx))
             .unwrap()
@@ -372,7 +370,7 @@ impl LateLookup for LFunction {
 
     fn late_lookup(id: Id<Self::Source>, ctx: &dyn AdelaideContext) -> Id<Self> {
         let source = id.lookup(ctx);
-        *ctx.lower_mod(source.parent.get())
+        *ctx.lower_mod(source.parent.get(ctx))
             .unwrap()
             .lookup(ctx)
             .functions
@@ -392,7 +390,7 @@ impl LateLookup for LObject {
 
     fn late_lookup(id: Id<Self::Source>, ctx: &dyn AdelaideContext) -> Id<Self> {
         let source = id.lookup(ctx);
-        *ctx.lower_mod(source.parent.get())
+        *ctx.lower_mod(source.parent.get(ctx))
             .unwrap()
             .lookup(ctx)
             .objects
@@ -409,7 +407,7 @@ impl LateLookup for LEnum {
 
     fn late_lookup(id: Id<Self::Source>, ctx: &dyn AdelaideContext) -> Id<Self> {
         let source = id.lookup(ctx);
-        *ctx.lower_mod(source.parent.get())
+        *ctx.lower_mod(source.parent.get(ctx))
             .unwrap()
             .lookup(ctx)
             .enums
@@ -426,7 +424,7 @@ impl LateLookup for LTrait {
 
     fn late_lookup(id: Id<Self::Source>, ctx: &dyn AdelaideContext) -> Id<Self> {
         let source = id.lookup(ctx);
-        *ctx.lower_mod(source.parent.get())
+        *ctx.lower_mod(source.parent.get(ctx))
             .unwrap()
             .lookup(ctx)
             .traits
@@ -443,7 +441,7 @@ impl LateLookup for LImpl {
 
     fn late_lookup(id: Id<Self::Source>, ctx: &dyn AdelaideContext) -> Id<Self> {
         let source = id.lookup(ctx);
-        *ctx.lower_mod(source.parent.get())
+        *ctx.lower_mod(source.parent.get(ctx))
             .unwrap()
             .lookup(ctx)
             .impls

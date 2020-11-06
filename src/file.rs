@@ -149,3 +149,14 @@ fn map_path_error(child_name: String, e: std::io::Error) -> AError {
 fn map_io_error(my_path: &Path, e: std::io::Error) -> AError {
     AError::IOErrorInPathChild(my_path.to_path_buf(), format!("{}", e))
 }
+
+pub fn mod_parent(ctx: &dyn AdelaideContext, key: Id<AFile>) -> Id<AFile> {
+    let path = &key.lookup(ctx).mod_path;
+    let mut m = ctx.mod_tree_root();
+
+    for p in &path[0..path.len() - 1] {
+        m = m.lookup(ctx).children[p];
+    }
+
+    m
+}
