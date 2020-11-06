@@ -1,20 +1,459 @@
+mod lid;
+mod uses;
+
 use std::{
-    collections::{BTreeMap, HashMap, HashSet, VecDeque},
-    sync::{Arc, Mutex},
+    collections::BTreeMap,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
 };
 
 use crate::{
     ctx::AdelaideContext,
-    file::AFile,
     lexer::Span,
-    parser::{PEnum, PFunction, PGlobal, PItem, PModule, PObject, PTrait},
-    util::{AError, AResult, Id, Intern, Opaque, Pretty},
+    parser::{
+        PEnum, PExpression, PFunction, PGlobal, PImpl, PModule, PObject, PTrait, PTraitType, PType,
+        PTypeData,
+    },
+    util::{AError, AResult, Id, Intern},
 };
 
-pub type LUseResult = Result<LUseItem, LUseError>;
+pub use uses::{
+    check_mod, early_lookup_ctx, local_mod_items, lookup_item, lookup_item_early, lower_mod_base,
+    mod_items, LEarlyContext, LUseError, LUseItem, LUseResult,
+};
 
-#[derive(Clone, Debug, Hash, Eq, PartialEq, PrettyPrint)]
-pub enum LUseItem {
+use self::lid::{LId, LateLookup};
+
+static INFER_IDS: AtomicUsize = AtomicUsize::new(0);
+
+#[derive(Debug, Hash, Eq, PartialEq, Lookup, PrettyPrint)]
+pub struct LModule {
+    #[plain]
+    source: Id<PModule>,
+    globals: BTreeMap<Id<PGlobal>, Id<LGlobal>>,
+    functions: BTreeMap<Id<PFunction>, Id<LFunction>>,
+    objects: BTreeMap<Id<PObject>, Id<LObject>>,
+    enums: BTreeMap<Id<PEnum>, Id<LEnum>>,
+    traits: BTreeMap<Id<PTrait>, Id<LTrait>>,
+    impls: BTreeMap<Id<PImpl>, Id<LImpl>>,
+}
+
+pub fn lower_mod(ctx: &dyn AdelaideContext, key: Id<PModule>) -> AResult<Id<LModule>> {
+    let info = key.lookup(ctx);
+
+    let mut lcx = LoweringContext::try_new(ctx, key)?;
+
+    let mut globals = btreemap! {};
+    let mut functions = btreemap! {};
+    let mut objects = btreemap! {};
+    let enums = btreemap! {};
+    let traits = btreemap! {};
+    let impls = btreemap! {};
+
+    for (&n, &i) in &*ctx.local_mod_items(key)? {
+        match i {
+            LScopeItem::Global(g) => {
+                globals.insert(g, lcx.lower_global(g)?);
+            },
+            LScopeItem::Module(m) => todo!(),
+            LScopeItem::Function(f) => todo!(),
+            LScopeItem::Object(o) => todo!(),
+            LScopeItem::Enum(e) => todo!(),
+            LScopeItem::Trait(_) => todo!(),
+            LScopeItem::EnumVariant(e, v) => todo!(),
+        }
+    }
+
+    Ok(LModule {
+        source: key,
+        globals,
+        functions,
+        objects,
+        enums,
+        traits,
+        impls,
+    }
+    .intern(ctx))
+}
+
+struct LoweringContext<'ctx> {
+    ctx: &'ctx dyn AdelaideContext,
+    parent: Id<PModule>,
+}
+
+impl<'ctx> LoweringContext<'ctx> {
+    fn try_new(
+        ctx: &'ctx dyn AdelaideContext,
+        parent: Id<PModule>,
+    ) -> AResult<LoweringContext<'ctx>> {
+        Ok(LoweringContext { ctx, parent })
+    }
+
+    fn lookup_std_item(&self, name: &str) -> LScopeItem {
+        // We expect none of these results to be an error, so just unwrap them.
+        *self.ctx
+            .mod_items(self.ctx.parsed_root().unwrap())
+            .unwrap()
+            .get(&name.intern(self.ctx))
+            .unwrap()
+    }
+
+    fn lookup_scoped_item(&self, at: Span, item: Id<str>) -> AResult<LScopeItem> {
+        todo!()
+    }
+
+    fn lookup_path(&self, path: &[(Span, Id<str>)]) -> AResult<LScopeItem> {
+        match self.lookup_path_partial(path)? {
+            (i, &[]) => Ok(i),
+            (i, &[(s, _), ..]) => Err(AError::ScopeItemNotAModule(i, s)),
+        }
+    }
+
+    fn lookup_path_partial<'p>(
+        &self,
+        path: &'p [(Span, Id<str>)],
+    ) -> AResult<(LScopeItem, &'p [(Span, Id<str>)])> {
+        assert!(!path.is_empty());
+        let ((span, name), path) = path.split_first().unwrap();
+
+        let mut item = self.lookup_scoped_item(*span, *name)?;
+
+        for (i, (span, name)) in path.iter().enumerate() {
+            match item {
+                LScopeItem::Module(m) => {
+                    item = self.ctx.lookup_item(*span, m, *name)?;
+                },
+                LScopeItem::Enum(e) => {
+                    let info = e.lookup(self.ctx);
+
+                    if info.variants.iter().any(|(_, n, _)| n == name) {
+                        return Ok((LScopeItem::EnumVariant(e, *name), &path[i + 1..]));
+                    } else {
+                        return Err(AError::EnumMissingVariant(*span, e, *name));
+                    }
+                },
+                item => {
+                    return Ok((item, &path[i + 1..]));
+                },
+            }
+        }
+
+        Ok((item, &[]))
+    }
+
+    fn lower_ty(&mut self, t: Id<PType>, infer_allowed: bool) -> AResult<Id<LType>> {
+        let PType { span, data } = &*t.lookup(self.ctx);
+
+        let data = match data {
+            PTypeData::Infer =>
+                if infer_allowed {
+                    LType::Infer(INFER_IDS.fetch_add(1, Ordering::Relaxed))
+                } else {
+                    todo!("Die!")
+                },
+            PTypeData::Awaitable(a) => {
+                if let LScopeItem::Object(awaitable) = self.lookup_std_item("Awaitable") {
+                    LType::Object(awaitable.into(), vec![self.lower_ty(*a, infer_allowed)?])
+                } else {
+                    unreachable!()
+                }
+            },
+            PTypeData::AmbiguousPath(p, g) => match self.lookup_path(&*p)? {
+                LScopeItem::Enum(e) => LType::Enum(e.into(), self.lower_tys(g, infer_allowed)?),
+                LScopeItem::Object(o) => LType::Object(o.into(), self.lower_tys(g, infer_allowed)?),
+                otherwise => {
+                    todo!("Die, not an object or enum or struct");
+                },
+            },
+            PTypeData::Elaborated(_, _) => todo!("Die"),
+            PTypeData::Associated(ty, m) => {
+                let (ty, trt) = self.lower_elaborated_ty(*ty, infer_allowed)?;
+                LType::Associated(ty, trt, *m)
+            },
+            PTypeData::Int => LType::Int,
+            PTypeData::Float => LType::Float,
+            PTypeData::Char => LType::Char,
+            PTypeData::Bool => LType::Bool,
+            PTypeData::String => LType::String,
+            PTypeData::SelfType => LType::SelfType,
+            PTypeData::Array(e) => LType::Array(self.lower_ty(*e, infer_allowed)?),
+            PTypeData::Tuple(es) => LType::Tuple(self.lower_tys(es, infer_allowed)?),
+            PTypeData::Closure(es, r) => LType::Closure(
+                self.lower_tys(es, infer_allowed)?,
+                self.lower_ty(*r, infer_allowed)?,
+            ),
+            PTypeData::FnPtr(es, r) => LType::FnPtr(
+                self.lower_tys(es, infer_allowed)?,
+                self.lower_ty(*r, infer_allowed)?,
+            ),
+            PTypeData::Dynamic(ts) => LType::Dynamic(self.lower_trait_tys(ts, infer_allowed)?),
+        };
+
+        Ok(data.intern(self.ctx))
+    }
+
+    fn lower_tys(&mut self, ts: &[Id<PType>], infer_allowed: bool) -> AResult<Vec<Id<LType>>> {
+        let mut ret = vec![];
+
+        for t in ts {
+            ret.push(self.lower_ty(*t, infer_allowed)?);
+        }
+
+        Ok(ret)
+    }
+
+    fn lower_elaborated_ty(
+        &mut self,
+        t: Id<PType>,
+        infer_allowed: bool,
+    ) -> AResult<(Id<LType>, Option<Id<LTraitType>>)> {
+        match &*t.lookup(self.ctx) {
+            PType {
+                data: PTypeData::Elaborated(t, trt),
+                ..
+            } => Ok((
+                self.lower_ty(*t, infer_allowed)?,
+                Some(self.lower_trait_ty(*trt, infer_allowed)?),
+            )),
+            // Otherwise, we did not extract an elaborated trait...
+            _ => Ok((self.lower_ty(t, infer_allowed)?, None)),
+        }
+    }
+
+    fn lower_trait_ty(
+        &mut self,
+        t: Id<PTraitType>,
+        infer_allowed: bool,
+    ) -> AResult<Id<LTraitType>> {
+        match &*t.lookup(self.ctx) {
+            PTraitType::Plain {
+                span,
+                path,
+                generics,
+                bounds,
+            } => {
+                let tr = match self.lookup_path(path)? {
+                    LScopeItem::Trait(t) => t,
+                    otherwise => todo!("Die"),
+                };
+
+                let generics = self.lower_tys(generics, infer_allowed)?;
+                // TODO:
+
+                let lowered_bounds = btreemap! {};
+                for (name, ty) in bounds {
+                    // TODO: Verify that all trait members are actually in the
+                    // given trait. We can do that with tr!
+                }
+
+                Ok(LTraitType {
+                    tr: tr.into(),
+                    generics,
+                    bounds: lowered_bounds,
+                }
+                .intern(self.ctx))
+            },
+            PTraitType::Function { span, params, ret } => {
+                let tr = if let LScopeItem::Trait(tr) = self.lookup_std_item("Call") {
+                    tr.into()
+                } else {
+                    unreachable!()
+                };
+                let generics =
+                    vec![LType::Tuple(self.lower_tys(params, infer_allowed)?).intern(self.ctx)];
+                let bounds =
+                    btreemap! { "Ret".intern(self.ctx) => self.lower_ty(*ret, infer_allowed)? };
+
+                Ok(LTraitType {
+                    tr,
+                    generics,
+                    bounds,
+                }
+                .intern(self.ctx))
+            },
+        }
+    }
+
+    fn lower_trait_tys(
+        &mut self,
+        ts: &[Id<PTraitType>],
+        infer_allowed: bool,
+    ) -> AResult<Vec<Id<LTraitType>>> {
+        let mut ret = vec![];
+
+        for t in ts {
+            ret.push(self.lower_trait_ty(*t, infer_allowed)?);
+        }
+
+        Ok(ret)
+    }
+
+    fn lower_global(&mut self, g: Id<PGlobal>) -> AResult<Id<LGlobal>> {
+        let PGlobal {
+            span,
+            name,
+            ty,
+            expr,
+            ..
+        } = &*g.lookup(self.ctx);
+
+        let ty = self.lower_ty(*ty, false)?;
+        let expr = self.lower_expr(*expr)?;
+
+        Ok(LGlobal {
+            source: g,
+            span: *span,
+            name: *name,
+            ty,
+            expr,
+        }
+        .intern(self.ctx))
+    }
+
+    fn lower_expr(&mut self, e: Id<PExpression>) -> AResult<Id<LExpression>> {
+        todo!()
+    }
+}
+
+#[derive(Debug, Hash, Eq, PartialEq, Lookup, PrettyPrint)]
+pub enum LType {
+    Infer(usize),
+
+    Int,
+    Float,
+    Char,
+    Bool,
+    String,
+    SelfType,
+
+    Array(Id<LType>),
+    Tuple(Vec<Id<LType>>),
+
+    Closure(Vec<Id<LType>>, Id<LType>),
+    FnPtr(Vec<Id<LType>>, Id<LType>),
+
+    Dynamic(Vec<Id<LTraitType>>),
+
+    Object(LId<LObject>, Vec<Id<LType>>),
+    Enum(LId<LEnum>, Vec<Id<LType>>),
+    Associated(Id<LType>, Option<Id<LTraitType>>, Id<str>),
+}
+
+#[derive(Debug, Hash, Eq, PartialEq, Lookup, PrettyPrint)]
+pub struct LTraitType {
+    tr: LId<LTrait>,
+    generics: Vec<Id<LType>>,
+    bounds: BTreeMap<Id<str>, Id<LType>>,
+}
+
+#[derive(Debug, Hash, Eq, PartialEq, Lookup, PrettyPrint)]
+pub struct LExpression {}
+
+#[derive(Debug, Hash, Eq, PartialEq, Lookup, PrettyPrint)]
+pub struct LGlobal {
+    #[plain]
+    source: Id<PGlobal>,
+    span: Span,
+    name: Id<str>,
+    ty: Id<LType>,
+    expr: Id<LExpression>,
+}
+
+#[derive(Debug, Hash, Eq, PartialEq, Lookup, PrettyPrint)]
+pub struct LFunction {
+    #[plain]
+    source: Id<PFunction>,
+}
+
+impl LateLookup for LFunction {
+    type Source = PFunction;
+
+    fn late_lookup(id: &LId<Self>, ctx: &dyn AdelaideContext) -> Id<Self> {
+        let source = id.0.lookup(ctx);
+        *ctx.lower_mod(source.parent.get())
+            .unwrap()
+            .lookup(ctx)
+            .functions
+            .get(&id.0)
+            .unwrap()
+    }
+}
+
+#[derive(Debug, Hash, Eq, PartialEq, Lookup, PrettyPrint)]
+pub struct LObject {
+    #[plain]
+    source: Id<PObject>,
+}
+
+impl LateLookup for LObject {
+    type Source = PObject;
+
+    fn late_lookup(id: &LId<Self>, ctx: &dyn AdelaideContext) -> Id<Self> {
+        let source = id.0.lookup(ctx);
+        *ctx.lower_mod(source.parent.get())
+            .unwrap()
+            .lookup(ctx)
+            .objects
+            .get(&id.0)
+            .unwrap()
+    }
+}
+
+#[derive(Debug, Hash, Eq, PartialEq, Lookup, PrettyPrint)]
+pub struct LEnum {}
+
+impl LateLookup for LEnum {
+    type Source = PEnum;
+
+    fn late_lookup(id: &LId<Self>, ctx: &dyn AdelaideContext) -> Id<Self> {
+        let source = id.0.lookup(ctx);
+        *ctx.lower_mod(source.parent.get())
+            .unwrap()
+            .lookup(ctx)
+            .enums
+            .get(&id.0)
+            .unwrap()
+    }
+}
+
+#[derive(Debug, Hash, Eq, PartialEq, Lookup, PrettyPrint)]
+pub struct LTrait {}
+
+impl LateLookup for LTrait {
+    type Source = PTrait;
+
+    fn late_lookup(id: &LId<Self>, ctx: &dyn AdelaideContext) -> Id<Self> {
+        let source = id.0.lookup(ctx);
+        *ctx.lower_mod(source.parent.get())
+            .unwrap()
+            .lookup(ctx)
+            .traits
+            .get(&id.0)
+            .unwrap()
+    }
+}
+
+#[derive(Debug, Hash, Eq, PartialEq, Lookup, PrettyPrint)]
+pub struct LImpl {}
+
+impl LateLookup for LImpl {
+    type Source = PImpl;
+
+    fn late_lookup(id: &LId<Self>, ctx: &dyn AdelaideContext) -> Id<Self> {
+        let source = id.0.lookup(ctx);
+        *ctx.lower_mod(source.parent.get())
+            .unwrap()
+            .lookup(ctx)
+            .impls
+            .get(&id.0)
+            .unwrap()
+    }
+}
+
+#[derive(Copy, Clone, Debug, Hash, Eq, PartialEq, PrettyPrint)]
+pub enum LScopeItem {
     Module(Id<PModule>),
     Global(Id<PGlobal>),
     Function(Id<PFunction>),
@@ -22,31 +461,24 @@ pub enum LUseItem {
     Enum(Id<PEnum>),
     EnumVariant(Id<PEnum>, Id<str>),
     Trait(Id<PTrait>),
-    Imported {
-        span: Span,
-        base: Option<Id<PModule>>,
-        path: VecDeque<(Span, Id<str>)>,
-        in_module: Id<PModule>,
-        name: Id<str>,
-    },
 }
 
-impl LUseItem {
+impl LScopeItem {
     pub fn info(&self, ctx: &dyn AdelaideContext) -> (&'static str, Id<str>, Span) {
         match self {
-            LUseItem::Module(e) => {
+            LScopeItem::Module(e) => {
                 let e = e.lookup(ctx);
                 ("module", e.name, e.span)
             },
-            LUseItem::Global(e) => {
+            LScopeItem::Global(e) => {
                 let e = e.lookup(ctx);
                 ("global variable", e.name, e.span)
             },
-            LUseItem::Function(e) => {
+            LScopeItem::Function(e) => {
                 let e = e.lookup(ctx);
                 ("function", e.name, e.span)
             },
-            LUseItem::Object(e) => {
+            LScopeItem::Object(e) => {
                 let e = e.lookup(ctx);
                 (
                     if e.is_structural { "struct" } else { "object" },
@@ -54,11 +486,11 @@ impl LUseItem {
                     e.span,
                 )
             },
-            LUseItem::Enum(e) => {
+            LScopeItem::Enum(e) => {
                 let e = e.lookup(ctx);
                 ("enum", e.name, e.span)
             },
-            LUseItem::EnumVariant(e, v) => {
+            LScopeItem::EnumVariant(e, v) => {
                 let e = e.lookup(ctx);
 
                 for (span, name, _) in &e.variants {
@@ -71,438 +503,25 @@ impl LUseItem {
 
                 unreachable!("This enum variant should be guaranteed to exist")
             },
-            LUseItem::Trait(e) => {
+            LScopeItem::Trait(e) => {
                 let e = e.lookup(ctx);
                 ("trait", e.name, e.span)
             },
-            LUseItem::Imported {
-                span,
-                base: _,
-                path: _,
-                name,
-                in_module: _,
-            } => ("imported item", *name, *span),
         }
     }
 }
 
-#[derive(Clone, Debug, Hash, Eq, PartialEq)]
-pub enum LUseError {
-    Missing(Id<PModule>, Id<str>, Span),
-    MissingVariant(Id<PEnum>, Id<str>),
-    Cycle(Vec<Span>, Id<str>),
-    Error(AError),
-    NotAModule(LUseItem),
-}
-
-impl From<AError> for LUseError {
-    fn from(e: AError) -> Self {
-        LUseError::Error(e)
-    }
-}
-
-#[derive(Debug, Hash, Eq, PartialEq, PrettyPrint)]
-pub struct LEarlyContext {
-    named_items: BTreeMap<Id<str>, LUseItem>,
-    full_imports: Vec<(Option<Id<PModule>>, VecDeque<(Span, Id<str>)>, Span)>,
-}
-
-pub fn lower_mod_base(ctx: &dyn AdelaideContext, key: Id<PModule>) -> AResult<Arc<LEarlyContext>> {
-    let module = key.lookup(ctx);
-
-    let mut named_items = btreemap! {};
-    let mut full_imports = vec![];
-
-    for &i in &module.items {
+impl From<LUseItem> for LScopeItem {
+    fn from(i: LUseItem) -> Self {
         match i {
-            PItem::Use(u) => {
-                let u = u.lookup(ctx);
-                let absolute = u.absolute;
-
-                for e in &u.elements {
-                    match e {
-                        crate::parser::PUseElement::UseAll(p, s) => {
-                            full_imports.push((
-                                if absolute { None } else { Some(key) },
-                                p.clone(),
-                                *s,
-                            ));
-                        },
-                        crate::parser::PUseElement::UseSelf(p, _, n)
-                        | crate::parser::PUseElement::Use(p, n) => {
-                            let n = n.unwrap_or_else(|| *p.back().unwrap());
-                            insert_base_item(&mut named_items, ctx, LUseItem::Imported {
-                                span: n.0,
-                                base: if absolute { None } else { Some(key) },
-                                path: p.clone(),
-                                in_module: key,
-                                name: n.1,
-                            })?;
-                        },
-                    }
-                }
-            },
-            PItem::Module(m) => insert_base_item(&mut named_items, ctx, LUseItem::Module(m))?,
-            PItem::Global(g) => insert_base_item(&mut named_items, ctx, LUseItem::Global(g))?,
-            PItem::Function(f) => insert_base_item(&mut named_items, ctx, LUseItem::Function(f))?,
-            PItem::Object(o) => insert_base_item(&mut named_items, ctx, LUseItem::Object(o))?,
-            PItem::Enum(e) => insert_base_item(&mut named_items, ctx, LUseItem::Enum(e))?,
-            PItem::Trait(t) => insert_base_item(&mut named_items, ctx, LUseItem::Trait(t))?,
-            PItem::Impl(_) => { /* Do nothing, not named. */ },
+            LUseItem::Module(m) => LScopeItem::Module(m),
+            LUseItem::Global(g) => LScopeItem::Global(g),
+            LUseItem::Function(f) => LScopeItem::Function(f),
+            LUseItem::Object(o) => LScopeItem::Object(o),
+            LUseItem::Enum(e) => LScopeItem::Enum(e),
+            LUseItem::EnumVariant(e, v) => LScopeItem::EnumVariant(e, v),
+            LUseItem::Trait(t) => LScopeItem::Trait(t),
+            LUseItem::Imported { .. } => unreachable!(),
         }
     }
-
-    Ok(Arc::new(LEarlyContext {
-        named_items,
-        full_imports,
-    }))
-}
-
-fn insert_base_item(
-    map: &mut BTreeMap<Id<str>, LUseItem>,
-    ctx: &dyn AdelaideContext,
-    i: LUseItem,
-) -> AResult<()> {
-    let (what, name, span) = i.info(ctx);
-
-    if let Some(old) = map.insert(name, i) {
-        let (what_old, _, span_old) = old.info(ctx);
-
-        Err(AError::LowerDuplicate(
-            span,
-            what,
-            span_old,
-            what_old,
-            name.lookup(ctx).to_string(),
-        ))
-    } else {
-        Ok(())
-    }
-}
-
-/// --- Early --- ///
-
-pub fn early_lookup_ctx(
-    _: &dyn AdelaideContext,
-) -> Opaque<Mutex<HashMap<(Id<PModule>, Id<str>), LUseResult>>> {
-    Arc::new(Mutex::new(hashmap! {})).into()
-}
-
-pub fn lookup_item_early(
-    ctx: &dyn AdelaideContext,
-    module: Id<PModule>,
-    path: VecDeque<(Span, Id<str>)>,
-) -> AResult<LUseItem> {
-    let seen = ctx.early_lookup_ctx();
-    let mut seen = seen.lock().unwrap();
-
-    Ok(lookup_item_early_deep(
-        ctx,
-        LUseItem::Module(module),
-        path,
-        &mut seen,
-    )?)
-}
-
-fn lookup_item_early_deep(
-    ctx: &dyn AdelaideContext,
-    mut current_item: LUseItem,
-    mut path: VecDeque<(Span, Id<str>)>,
-    seen: &mut HashMap<(Id<PModule>, Id<str>), LUseResult>,
-) -> LUseResult {
-    let parsed_root = ctx.parsed_root()?;
-    assert!(!path.is_empty(), "Cannot lookup an empty path!");
-
-    while !path.is_empty() || matches!(current_item, LUseItem::Imported { .. }) {
-        match current_item {
-            LUseItem::Imported {
-                span,
-                base,
-                path,
-                in_module,
-                name,
-            } => {
-                seen.insert((in_module, name), Err(LUseError::Cycle(vec![span], name)));
-
-                current_item = lookup_item_early_deep_relative(ctx, base, path, seen).map_err(
-                    // Add a cycle edge for error printing purposes
-                    |e| match e {
-                        LUseError::Cycle(mut s, n) => {
-                            s.push(span);
-                            LUseError::Cycle(s, n)
-                        },
-                        e => e,
-                    },
-                )?;
-
-                seen.insert((in_module, name), Ok(current_item.clone()));
-            },
-            LUseItem::Module(m) => {
-                let info = ctx.lower_mod_base(m)?;
-                let (span, name) = path.pop_front().unwrap();
-
-                match seen.get(&(m, name)) {
-                    Some(Err(LUseError::Cycle(s, n))) => {
-                        let mut s = s.clone();
-                        s.push(span);
-                        return Err(LUseError::Cycle(s, *n));
-                    },
-                    Some(i) => {
-                        current_item = i.clone()?;
-                    },
-                    None => {
-                        /* We haven't seen this item before */
-                        if let Some(e) = info.named_items.get(&name) {
-                            current_item = e.clone();
-                        } else {
-                            seen.insert((m, name), Err(LUseError::Cycle(vec![span], name)));
-
-                            let look_for_item = info
-                                .full_imports
-                                .iter()
-                                .flat_map(|(relative, path, _)| {
-                                    // Given an import like
-                                    //   use a::b::*.
-                                    // and we're looking for
-                                    //   $CURRENT_ITEM::c::d.
-                                    // We can look for
-                                    //   a::b::c
-                                    // And if we find it, we're good.
-                                    let mut path = path.clone();
-                                    path.push_back((span, name));
-
-                                    match lookup_item_early_deep_relative(
-                                        ctx, *relative, path, seen,
-                                    ) {
-                                        Ok(i) => Some(i),
-                                        Err(_) => None,
-                                    }
-                                })
-                                .next();
-
-                            if let Some(i) = look_for_item {
-                                current_item = i;
-                            } else {
-                                current_item = lookup_item_early_deep(
-                                    ctx,
-                                    LUseItem::Module(parsed_root),
-                                    vec![(span, name)].into(),
-                                    seen,
-                                )
-                                .map_err(|_| LUseError::Missing(m, name, span))?;
-                            }
-
-                            seen.insert((m, name), Ok(current_item.clone()));
-                        }
-                    },
-                }
-            },
-            LUseItem::Enum(e) => {
-                let info = e.lookup(ctx);
-                let (_, name) = path.pop_front().unwrap();
-
-                if info.variants.iter().any(|(_, n, _)| n == &name) {
-                    current_item = LUseItem::EnumVariant(e, name);
-                } else {
-                    return Err(LUseError::MissingVariant(e, name));
-                }
-            },
-            _ => {
-                return Err(LUseError::NotAModule(current_item));
-            },
-        }
-    }
-
-    Ok(current_item)
-}
-
-pub fn lookup_item_early_deep_relative(
-    ctx: &dyn AdelaideContext,
-    module: Option<Id<PModule>>,
-    mut path: VecDeque<(Span, Id<str>)>,
-    seen: &mut HashMap<(Id<PModule>, Id<str>), LUseResult>,
-) -> LUseResult {
-    debug!(
-        "Looking up path {:?} in module {:?}",
-        Pretty(&module, ctx),
-        Pretty(&path, ctx)
-    );
-
-    let original_error = if let Some(module) = module {
-        match lookup_item_early_deep(ctx, LUseItem::Module(module), path.clone(), seen) {
-            Ok(i) => return Ok(i),
-            Err(e) => Some(e),
-        }
-    } else {
-        None
-    };
-
-    match lookup_item_early_deep(
-        ctx,
-        LUseItem::Module(ctx.parsed_root()?),
-        path.clone(),
-        seen,
-    ) {
-        Ok(i) => Ok(i),
-        Err(e) => Err(original_error.unwrap_or(e)),
-    }
-}
-
-/// --- Late --- ///
-
-pub fn mod_items(
-    ctx: &dyn AdelaideContext,
-    module: Id<PModule>,
-) -> AResult<Arc<HashMap<Id<str>, LUseItem>>> {
-    let mut items = hashmap! {};
-
-    mod_items_deep(
-        &mut items,
-        &mut hashmap! {},
-        &mut hashset! {},
-        ctx,
-        LUseItem::Module(module),
-    )?;
-
-    Ok(Arc::new(items))
-}
-
-fn mod_items_deep(
-    items: &mut HashMap<Id<str>, LUseItem>,
-    blame_spans: &mut HashMap<Id<str>, Span>,
-    visited: &mut HashSet<Id<PModule>>,
-    ctx: &dyn AdelaideContext,
-    item: LUseItem,
-) -> AResult<()> {
-    let parsed_root = ctx.parsed_root()?;
-
-    match item {
-        LUseItem::Module(module) => {
-            if !visited.insert(module) {
-                return Ok(());
-            }
-
-            let info = ctx.lower_mod_base(module)?;
-
-            for (name, i) in &info.named_items {
-                match i {
-                    LUseItem::Imported {
-                        span,
-                        base,
-                        path,
-                        name,
-                        in_module: _,
-                    } => {
-                        let base = base.unwrap_or(parsed_root);
-                        let item = ctx.lookup_item_early(base, path.clone())?;
-                        insert_late_item(items, blame_spans, ctx, *name, *span, item)?;
-                    },
-                    item => {
-                        let (_, _, span) = i.info(ctx);
-                        insert_late_item(items, blame_spans, ctx, *name, span, item.clone())?;
-                    },
-                }
-
-                for (relative, path, _) in &info.full_imports {
-                    let base = relative.unwrap_or(parsed_root);
-                    let item = ctx.lookup_item_early(base, path.clone())?;
-                    mod_items_deep(items, blame_spans, visited, ctx, item)?;
-                }
-            }
-        },
-        _ => todo!(),
-    }
-
-    Ok(())
-}
-
-fn insert_late_item(
-    items: &mut HashMap<Id<str>, LUseItem>,
-    blame_spans: &mut HashMap<Id<str>, Span>,
-    ctx: &dyn AdelaideContext,
-    name: Id<str>,
-    span: Span,
-    item: LUseItem,
-) -> AResult<()> {
-    if let Some(span_old) = blame_spans.insert(name, span) {
-        let (what, _, _) = item.info(ctx);
-        let (what_old, _, _) = items.get(&name).unwrap().info(ctx);
-
-        return Err(AError::LowerDuplicate(
-            span,
-            what,
-            span_old,
-            what_old,
-            name.lookup(ctx).to_string(),
-        ));
-    }
-
-    items.insert(name, item);
-    blame_spans.insert(name, span);
-
-    Ok(())
-}
-
-pub fn lookup_item(
-    ctx: &dyn AdelaideContext,
-    mut current_mod: Id<PModule>,
-    mut path: VecDeque<(Span, Id<str>)>,
-) -> AResult<(LUseItem, VecDeque<(Span, Id<str>)>)> {
-    assert!(!path.is_empty(), "Cannot lookup an empty path!");
-
-    while let Some((span, name)) = path.pop_front() {
-        let items = ctx.mod_items(current_mod)?;
-
-        match items.get(&name) {
-            Some(LUseItem::Module(m)) => {
-                current_mod = *m;
-            },
-            Some(LUseItem::Enum(e)) if !path.is_empty() => {
-                let (_, name) = path.pop_front().unwrap();
-                let info = e.lookup(ctx);
-
-                if info.variants.iter().any(|(_, n, _)| n == &name) {
-                    return Ok((LUseItem::EnumVariant(*e, name), path));
-                } else {
-                    return Err(LUseError::MissingVariant(*e, name).into());
-                }
-            },
-            Some(i) => return Ok((i.clone(), path)),
-            None => {
-                return Err(LUseError::Missing(current_mod, name, span).into());
-            },
-        }
-    }
-
-    Ok((LUseItem::Module(current_mod), path /* <- empty */))
-}
-
-/// --- Temporary testing code --- ///
-
-pub fn check_mod(ctx: &dyn AdelaideContext, key: Id<AFile>) -> AResult<()> {
-    let parsed_root = ctx.parse_mod(key)?;
-
-    lower_test_single(ctx, parsed_root)
-}
-
-fn lower_test_single(ctx: &dyn AdelaideContext, key: Id<PModule>) -> AResult<()> {
-    let info = key.lookup(ctx);
-
-    for i in &info.items {
-        match i {
-            PItem::Module(m) => {
-                lower_test_single(ctx, *m)?;
-            },
-            _ => {},
-        }
-    }
-
-    let lowered = ctx.mod_items(key)?;
-    println!(
-        "Module {}:\n{:#?}\n",
-        info.name.lookup(ctx),
-        Pretty(lowered, ctx)
-    );
-
-    Ok(())
 }

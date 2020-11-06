@@ -1,3 +1,4 @@
+#[cfg_attr(feature = "cargo-clippy", allow(clippy))]
 lalrpop_mod!(pub cheshire, "/parser/cheshire.rs");
 
 mod ast;
@@ -12,7 +13,7 @@ use crate::{
     ctx::AdelaideContext,
     file::AFile,
     lexer::{Lexer, Span, SpanToken, Token},
-    util::{AError, AResult, Id, Intern},
+    util::{AError, AResult, BackId, Id, Intern},
 };
 
 pub fn parsed_root(ctx: &dyn AdelaideContext) -> AResult<Id<PModule>> {
@@ -47,13 +48,21 @@ pub fn parse_mod(ctx: &dyn AdelaideContext, file_id: Id<AFile>) -> AResult<Id<PM
         .map_err(|e| map_parse_error(file_id, e))?;
     items.extend(parsed_items);
 
-    Ok(PModule {
-        file_id: file_id.into(),
+    let m = PModule {
+        source: file_id,
+        parent: BackId::new(),
         span,
         name,
         items,
     }
-    .intern(ctx))
+    .intern(ctx);
+
+    // Link all the BackId's in the module
+    for i in &m.lookup(ctx).items {
+        i.link_parent(ctx, m);
+    }
+
+    Ok(m)
 }
 
 fn map_parse_error(file_id: Id<AFile>, error: ParseError<usize, Token, AError>) -> AError {

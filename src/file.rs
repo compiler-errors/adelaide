@@ -15,7 +15,7 @@ lazy_static! {
     static ref MODULE_NAME_REGEX: Regex = Regex::new(r"^[a-z][a-zA-Z0-9_]*$").unwrap();
 }
 
-#[derive(Debug, Hash, Eq, PartialEq, PrettyPrint)]
+#[derive(Debug, Hash, Eq, PartialEq, Lookup, PrettyPrint)]
 pub struct AFile {
     pub path: Option<PathBuf>,
     pub mod_path: Vec<String>,
@@ -148,14 +148,4 @@ fn map_path_error(child_name: String, e: std::io::Error) -> AError {
 
 fn map_io_error(my_path: &Path, e: std::io::Error) -> AError {
     AError::IOErrorInPathChild(my_path.to_path_buf(), format!("{}", e))
-}
-
-impl Lookup for AFile {
-    fn lookup(id: Id<AFile>, ctx: &dyn AdelaideContext) -> Arc<Self> {
-        ctx.lookup_intern_file(id)
-    }
-
-    fn intern_self(self: Arc<Self>, ctx: &dyn AdelaideContext) -> Id<Self> {
-        ctx.intern_file(self)
-    }
 }

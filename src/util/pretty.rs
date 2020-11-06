@@ -104,7 +104,7 @@ macro_rules! simple_pretty {
     }
 }
 
-simple_pretty!(bool, u64, char, str, String);
+simple_pretty!(bool, u64, usize, char, str, String);
 simple_pretty!(std::path::PathBuf);
 
 macro_rules! tuple_pretty {

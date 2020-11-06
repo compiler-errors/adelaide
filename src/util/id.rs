@@ -6,13 +6,15 @@ use std::{
 #[must_use]
 pub struct Id<T: ?Sized>(NonZeroU32, PhantomData<T>);
 
+impl<T: ?Sized> Id<T> {
+    pub fn id(self) -> u32 {
+        self.0.into()
+    }
+}
+
 impl<T: Lookup + ?Sized> Id<T> {
     pub fn lookup(self, ctx: &dyn AdelaideContext) -> Arc<T> {
         T::lookup(self, ctx)
-    }
-
-    pub fn id(self) -> u32 {
-        self.0.into()
     }
 }
 
@@ -123,9 +125,7 @@ impl<T: ?Sized> PartialEq for BackId<T> {
 impl<T: ?Sized> Eq for BackId<T> {}
 
 impl<T: ?Sized> Hash for BackId<T> {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        // Do nothing lol
-    }
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {}
 }
 
 impl<T: ?Sized> Debug for BackId<T> {
@@ -146,6 +146,10 @@ impl<T: ?Sized> PrettyPrint for BackId<T> {
 impl<T: Lookup + ?Sized> BackId<T> {
     pub fn new() -> BackId<T> {
         BackId(SyncOnceCell::new())
+    }
+
+    pub fn get(&self) -> Id<T> {
+        *self.0.get().expect("ID should be initialized by now")
     }
 
     pub fn set(&self, id: Id<T>) {

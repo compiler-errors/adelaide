@@ -9,7 +9,10 @@ use codespan_reporting::files::Files;
 use crate::{
     file::AFile,
     lexer::Span,
-    lowering::{LEarlyContext, LUseItem, LUseResult},
+    lowering::{
+        LEarlyContext, LEnum, LExpression, LFunction, LGlobal, LImpl, LModule, LObject, LScopeItem,
+        LTrait, LTraitType, LType, LUseItem, LUseResult,
+    },
     parser::{
         PEnum, PExpression, PFunction, PGlobal, PImpl, PModule, PObject, PPattern, PStatement,
         PTrait, PTraitType, PType, PUse,
@@ -33,7 +36,7 @@ pub trait AdelaideContext: salsa::Database {
     fn intern_str(&self, data: Arc<str>) -> Id<str>;
 
     #[salsa::interned]
-    fn intern_file(&self, data: Arc<AFile>) -> Id<AFile>;
+    fn intern_afile(&self, data: Arc<AFile>) -> Id<AFile>;
 
     // ------ LEXER ------ //
 
@@ -95,7 +98,8 @@ pub trait AdelaideContext: salsa::Database {
     #[salsa::invoke(crate::lowering::check_mod)]
     fn check_mod(&self, key: Id<AFile>) -> AResult<()>;
 
-    // fn lower_mod(&self, key: Id<PModule>) -> AResult<Id<LModule>>;
+    #[salsa::invoke(crate::lowering::lower_mod)]
+    fn lower_mod(&self, key: Id<PModule>) -> AResult<Id<LModule>>;
 
     #[salsa::invoke(crate::lowering::lower_mod_base)]
     fn lower_mod_base(&self, key: Id<PModule>) -> AResult<Arc<LEarlyContext>>;
@@ -110,16 +114,51 @@ pub trait AdelaideContext: salsa::Database {
         path: VecDeque<(Span, Id<str>)>,
     ) -> AResult<LUseItem>;
 
+    #[salsa::invoke(crate::lowering::local_mod_items)]
+    fn local_mod_items(&self, module: Id<PModule>) -> AResult<Arc<HashMap<Id<str>, LScopeItem>>>;
+
     #[salsa::invoke(crate::lowering::mod_items)]
-    fn mod_items(&self, module: Id<PModule>) -> AResult<Arc<HashMap<Id<str>, LUseItem>>>;
+    fn mod_items(&self, module: Id<PModule>) -> AResult<Arc<HashMap<Id<str>, LScopeItem>>>;
 
     // TODO: Could just reverse this path argument and use a Vec lol
     #[salsa::invoke(crate::lowering::lookup_item)]
-    fn lookup_item(
-        &self,
-        module: Id<PModule>,
-        path: VecDeque<(Span, Id<str>)>,
-    ) -> AResult<(LUseItem, VecDeque<(Span, Id<str>)>)>;
+    fn lookup_item(&self, span: Span, module: Id<PModule>, name: Id<str>) -> AResult<LScopeItem>;
+
+    #[salsa::interned]
+    fn intern_lmodule(&self, key: Arc<LModule>) -> Id<LModule>;
+
+    #[salsa::interned]
+    fn intern_lfunction(&self, key: Arc<LFunction>) -> Id<LFunction>;
+
+    #[salsa::interned]
+    fn intern_lobject(&self, key: Arc<LObject>) -> Id<LObject>;
+
+    #[salsa::interned]
+    fn intern_lenum(&self, key: Arc<LEnum>) -> Id<LEnum>;
+
+    #[salsa::interned]
+    fn intern_ltrait(&self, key: Arc<LTrait>) -> Id<LTrait>;
+
+    #[salsa::interned]
+    fn intern_limpl(&self, key: Arc<LImpl>) -> Id<LImpl>;
+
+    #[salsa::interned]
+    fn intern_ltype(&self, key: Arc<LType>) -> Id<LType>;
+
+    #[salsa::interned]
+    fn intern_ltraittype(&self, key: Arc<LTraitType>) -> Id<LTraitType>;
+
+    #[salsa::interned]
+    fn intern_lglobal(&self, key: Arc<LGlobal>) -> Id<LGlobal>;
+
+    #[salsa::interned]
+    fn intern_lexpression(&self, key: Arc<LExpression>) -> Id<LExpression>;
+
+    //#[salsa::interned]
+    //fn intern_lstatement(&self, key: Arc<LStatement>) -> Id<LStatement>;
+
+    //#[salsa::interned]
+    //fn intern_lpattern(&self, key: Arc<LPattern>) -> Id<LPattern>;
 
     // ------ TYPECHECKER ------ //
 
@@ -151,11 +190,7 @@ fn line_start(ctx: &dyn AdelaideContext, id: Id<AFile>, idx: usize) -> Option<us
 }
 
 fn literal_module_children(ctx: &dyn AdelaideContext, file_id: Id<AFile>) -> Vec<Id<AFile>> {
-    ctx.lookup_intern_file(file_id)
-        .children
-        .values()
-        .cloned()
-        .collect()
+    file_id.lookup(ctx).children.values().cloned().collect()
 }
 
 #[salsa::database(AdelaideStorage)]

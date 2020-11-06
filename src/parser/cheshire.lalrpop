@@ -128,14 +128,14 @@ PlusSeparated<T>: Vec<T> = {
 
 // --- Paths --- //
 
-IdentifierPath: Vec<Id<str>> = {
-    <p:IdentifierPath> "::" <i:Identifier> => append(p, i),
-    <i:Identifier> => vec![i],
+IdentifierPath: Vec<(Span, Id<str>)> = {
+    <p:IdentifierPath> "::" <l:@L> <i:Identifier> <h:@R> => append(p, (Span(file, l, h), i)),
+    <l:@L> <i:Identifier> <h:@R> => vec![(Span(file, l, h), i)],
 };
 
-TypeNamePath: Vec<Id<str>> = {
-    <p:IdentifierPath> "::" <t:TypeName> => append(p, t),
-    <t:TypeName> => vec![t],
+TypeNamePath: Vec<(Span, Id<str>)> = {
+    <p:IdentifierPath> "::" <l:@L> <t:TypeName> <h:@R> => append(p, (Span(file, l, h), t)),
+    <l:@L> <t:TypeName> <h:@R> => vec![(Span(file, l, h), t)],
 };
 
 // --- Items --- //
@@ -390,7 +390,7 @@ TypeRestriction: (Id<PType>, Vec<Id<PTraitType>>) = {
 
 TraitType: Id<PTraitType> = {
     <l:@L> <t:TypeNamePath> <g:MaybeGenericsOrAssoc> <h:@R> =>
-        PTraitType::new_mixed(Span(file, l, h), t, g).intern(ctx),
+        PTraitType::new(Span(file, l, h), t, g).intern(ctx),
     <l:@L> "Fn" "(" <p:CommaTrailingOrEmpty<Type>> ")" <r:MaybeReturn> <h:@R> =>
         PTraitType::fn_trait(Span(file, l, h), p, r).intern(ctx),
 };
@@ -685,7 +685,7 @@ NamedExpressionFields: PConstructorArguments = {
 
 NamedExpressionField: (Span, Id<str>, Id<PExpression>) = {
     <l:@L> <i:Identifier> <h:@R> =>
-        (Span(file, l, h), i, PExpression::identifiers(Span(file, l, h), vec![i], vec![]).intern(ctx)),
+        (Span(file, l, h), i, PExpression::identifiers(Span(file, l, h), vec![(Span(file, l, h), i)], vec![]).intern(ctx)),
     <l:@L> <i:Identifier> ":" <e:Expression> <h:@R> =>
         (Span(file, l, h), i, e),
 };
