@@ -1,6 +1,6 @@
 use crate::{
     ctx::AdelaideContext,
-    util::{AError, AResult, Id, Intern, Lookup},
+    util::{AError, AResult, Id, Intern},
 };
 use lazy_static::lazy_static;
 use regex::Regex;
@@ -154,8 +154,10 @@ pub fn mod_parent(ctx: &dyn AdelaideContext, key: Id<AFile>) -> Id<AFile> {
     let path = &key.lookup(ctx).mod_path;
     let mut m = ctx.mod_tree_root();
 
-    for p in &path[0..path.len() - 1] {
-        m = m.lookup(ctx).children[p];
+    if !path.is_empty() {
+        for p in &path[0..path.len() - 1] {
+            m = m.lookup(ctx).children[p];
+        }
     }
 
     m

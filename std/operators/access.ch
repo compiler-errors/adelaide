@@ -69,18 +69,14 @@ impl Deref<Int> for String {
   }.
 }
 
-trait DerefAssign<Idx> {
-  type Value.
-
+trait DerefAssign<Idx> where Self: Deref<Idx> {
   fn deref_assign(
     self,
     idx: Idx,
-    value: <Self as DerefAssign<Idx>>::Value) -> <Self as DerefAssign<Idx>>::Value.
+    value: <Self as Deref<Idx>>::Result) -> <Self as Deref<Idx>>::Result.
 }
 
 impl<T> DerefAssign<Int> for [T] {
-  type Value = T.
-
   fn deref_assign(self, idx: Int, value: T) -> T = {
       internal_array_store(self, idx, value)
   }.

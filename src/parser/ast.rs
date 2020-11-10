@@ -541,7 +541,7 @@ pub enum PTraitType {
         span: Span,
         path: Vec<(Span, Id<str>)>,
         generics: Vec<Id<PType>>,
-        bounds: Vec<(Id<str>, Id<PType>)>,
+        bounds: Vec<(Span, Id<str>, Id<PType>)>,
     },
     Function {
         span: Span,
@@ -554,7 +554,7 @@ impl PTraitType {
     pub fn new(
         span: Span,
         path: Vec<(Span, Id<str>)>,
-        generics_and_bounds: Vec<Either<Id<PType>, (Id<str>, Id<PType>)>>,
+        generics_and_bounds: Vec<Either<Id<PType>, (Span, Id<str>, Id<PType>)>>,
     ) -> PTraitType {
         let mut generics = vec![];
         let mut bounds = vec![];
@@ -643,8 +643,14 @@ pub enum PExpressionData {
         Id<PExpression>,
     ),
     Match(Id<PExpression>, Vec<(Id<PPattern>, Id<PExpression>)>),
-    Structural(Id<PType>, PConstructorArguments),
-    Allocate(Id<PType>, PConstructorArguments),
+    StructuralAmbiguous(Vec<(Span, Id<str>)>, Vec<Id<PType>>, PConstructorArguments),
+    StructuralVariant(
+        Vec<(Span, Id<str>)>,
+        Vec<Id<PType>>,
+        Id<str>,
+        PConstructorArguments,
+    ),
+    Allocate(Vec<(Span, Id<str>)>, Vec<Id<PType>>, PConstructorArguments),
     Return(Id<PExpression>),
     Assert(Id<PExpression>),
     Break(Option<Id<PExpression>>, Option<(Span, Id<str>)>),
@@ -889,17 +895,40 @@ impl PExpression {
         }
     }
 
-    pub fn structural(span: Span, t: Id<PType>, c: PConstructorArguments) -> PExpression {
+    pub fn structural_ambiguous(
+        span: Span,
+        t: Vec<(Span, Id<str>)>,
+        g: Vec<Id<PType>>,
+        c: PConstructorArguments,
+    ) -> PExpression {
         PExpression {
             span,
-            data: PExpressionData::Structural(t, c),
+            data: PExpressionData::StructuralAmbiguous(t, g, c),
         }
     }
 
-    pub fn allocate(span: Span, t: Id<PType>, c: PConstructorArguments) -> PExpression {
+    pub fn structural_variant(
+        span: Span,
+        t: Vec<(Span, Id<str>)>,
+        g: Vec<Id<PType>>,
+        v: Id<str>,
+        c: PConstructorArguments,
+    ) -> PExpression {
         PExpression {
             span,
-            data: PExpressionData::Allocate(t, c),
+            data: PExpressionData::StructuralVariant(t, g, v, c),
+        }
+    }
+
+    pub fn allocate(
+        span: Span,
+        t: Vec<(Span, Id<str>)>,
+        g: Vec<Id<PType>>,
+        c: PConstructorArguments,
+    ) -> PExpression {
+        PExpression {
+            span,
+            data: PExpressionData::Allocate(t, g, c),
         }
     }
 
@@ -987,7 +1016,6 @@ impl PExpression {
 pub enum PBinopKind {
     RangeInclusive,
     RangeExclusive,
-    Assign,
     OrCircuit,
     AndCircuit,
     Or,
@@ -1010,7 +1038,6 @@ impl From<Token> for PBinopKind {
         match t {
             Token::DotDotEq => PBinopKind::RangeInclusive,
             Token::DotDot => PBinopKind::RangeExclusive,
-            Token::Equals => PBinopKind::Assign,
             Token::PipeShort => PBinopKind::OrCircuit,
             Token::AndShort => PBinopKind::AndCircuit,
             Token::Pipe => PBinopKind::Or,
@@ -1038,7 +1065,7 @@ pub enum PConstructorArguments {
     Named(Span, Vec<(Span, Id<str>, Id<PExpression>)>),
 }
 
-#[derive(Debug, Hash, Eq, PartialEq, PrettyPrint)]
+#[derive(Copy, Clone, Debug, Hash, Eq, PartialEq, PrettyPrint)]
 pub enum PLiteral {
     True,
     False,
@@ -1089,7 +1116,17 @@ pub enum PPatternData {
     Literal(PLiteral),
     Identifier(Id<str>),
     Tuple(Vec<Id<PPattern>>),
-    Structural(Id<PType>, PPatternConstructorArguments),
+    StructuralAmbiguous(
+        Vec<(Span, Id<str>)>,
+        Vec<Id<PType>>,
+        PPatternConstructorArguments,
+    ),
+    StructuralVariant(
+        Vec<(Span, Id<str>)>,
+        Vec<Id<PType>>,
+        Id<str>,
+        PPatternConstructorArguments,
+    ),
 }
 
 impl PPattern {
@@ -1125,16 +1162,32 @@ impl PPattern {
         }
     }
 
-    pub fn structural(
+    pub fn structural_ambiguous(
         span: Span,
         ty: Id<PType>,
-        t: Id<PType>,
+        t: Vec<(Span, Id<str>)>,
+        g: Vec<Id<PType>>,
         c: PPatternConstructorArguments,
     ) -> PPattern {
         PPattern {
             span,
             ty,
-            data: PPatternData::Structural(t, c),
+            data: PPatternData::StructuralAmbiguous(t, g, c),
+        }
+    }
+
+    pub fn structural_variant(
+        span: Span,
+        ty: Id<PType>,
+        t: Vec<(Span, Id<str>)>,
+        g: Vec<Id<PType>>,
+        v: Id<str>,
+        c: PPatternConstructorArguments,
+    ) -> PPattern {
+        PPattern {
+            span,
+            ty,
+            data: PPatternData::StructuralVariant(t, g, v, c),
         }
     }
 }

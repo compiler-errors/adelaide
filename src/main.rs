@@ -97,7 +97,8 @@ fn try_main(ctx: &mut AdelaideDatabase) -> AResult<()> {
             println!("{:#?}", Pretty(m, ctx))
         },
         Mode::Check => {
-            ctx.check_root()?;
+            let l = ctx.lower_root()?;
+            println!("{:#?}", Pretty(l, ctx))
         },
     }
 

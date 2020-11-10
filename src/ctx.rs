@@ -10,15 +10,15 @@ use crate::{
     file::AFile,
     lexer::Span,
     lowering::{
-        LEarlyContext, LEnum, LExpression, LFunction, LGlobal, LImpl, LModule, LObject, LScopeItem,
-        LTrait, LTraitType, LType, LUseItem, LUseResult,
+        LEarlyContext, LEnum, LExpression, LFunction, LGlobal, LImpl, LModule, LObject, LPattern,
+        LScopeItem, LStatement, LTrait, LTraitType, LType, LUseItem, LUseResult,
     },
     parser::{
         PEnum, PExpression, PFunction, PGlobal, PImpl, PModule, PObject, PPattern, PStatement,
         PTrait, PTraitType, PType, PUse,
     },
     read::{RawFile, RawFileSource},
-    util::{AResult, Id, LId, Opaque},
+    util::{AResult, Id, Intern, LId, Opaque},
 };
 
 #[salsa::query_group(AdelaideStorage)]
@@ -98,8 +98,8 @@ pub trait AdelaideContext: salsa::Database {
 
     // ------ LOWERING ------ //
 
-    #[salsa::invoke(crate::lowering::check_mod)]
-    fn check_root(&self) -> AResult<()>;
+    #[salsa::invoke(crate::lowering::lower_root)]
+    fn lower_root(&self) -> AResult<Id<LModule>>;
 
     #[salsa::invoke(crate::lowering::lower_mod)]
     fn lower_mod(&self, key: Id<PModule>) -> AResult<Id<LModule>>;
@@ -157,11 +157,16 @@ pub trait AdelaideContext: salsa::Database {
     #[salsa::interned]
     fn intern_lexpression(&self, key: Arc<LExpression>) -> Id<LExpression>;
 
-    //#[salsa::interned]
-    //fn intern_lstatement(&self, key: Arc<LStatement>) -> Id<LStatement>;
+    #[salsa::interned]
+    fn intern_lstatement(&self, key: Arc<LStatement>) -> Id<LStatement>;
 
-    //#[salsa::interned]
-    //fn intern_lpattern(&self, key: Arc<LPattern>) -> Id<LPattern>;
+    #[salsa::interned]
+    fn intern_lpattern(&self, key: Arc<LPattern>) -> Id<LPattern>;
+
+    #[salsa::invoke(crate::lowering::get_bound_names)]
+    fn get_bound_names(&self, tr: Id<PTrait>) -> AResult<Arc<HashMap<Id<str>, Span>>>;
+
+    fn static_name(&self, name: &'static str) -> Id<str>;
 
     // ------ TYPECHECKER ------ //
 
@@ -170,6 +175,10 @@ pub trait AdelaideContext: salsa::Database {
     // ------ MONOMORPHIZATION ------ //
 
     // ...
+}
+
+fn static_name(ctx: &dyn AdelaideContext, s: &'static str) -> Id<str> {
+    s.intern(ctx)
 }
 
 // ------ File Stuff ------ //

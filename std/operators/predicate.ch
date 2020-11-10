@@ -6,17 +6,17 @@ extern fn internal_feq(a: Float, b: Float) -> Bool.
 
 extern fn internal_string_eq(a: String, b: String) -> Bool.
 
-trait PartialCompare<T> {
+trait SimpleCompare<T> {
   fn compare(self, other: T) -> Int.
 }
 
-impl PartialCompare<Int> for Int {
+impl SimpleCompare<Int> for Int {
   fn compare(self, other: Int) -> Int = {
     self - other
   }.
 }
 
-impl PartialCompare<Float> for Float {
+impl SimpleCompare<Float> for Float {
   fn compare(self, other: Float) -> Int = {
     if internal_feq(self, other) {
       0
@@ -28,7 +28,7 @@ impl PartialCompare<Float> for Float {
   }.
 }
 
-impl PartialCompare<Char> for Char {
+impl SimpleCompare<Char> for Char {
   fn compare(self, other: Char) -> Int = {
     self - other
   }.
@@ -41,7 +41,7 @@ trait Compare<T> {
   fn le(self, other: T) -> Bool.
 }
 
-impl<S, T> Compare<T> for S where S: PartialCompare<T> {
+impl<S, T> Compare<T> for S where S: SimpleCompare<T> {
   fn gt(self, other: T) -> Bool = {
     let res = self:compare(other).
     internal_gt(res, 0)
@@ -66,7 +66,7 @@ trait Equals<T> {
   fn ne(self, other: T) -> Bool.
 }
 
-impl<S, T> Equals<T> for S where S: PartialCompare<T> {
+impl<S, T> Equals<T> for S where S: SimpleCompare<T> {
   fn eq(self, other: T) -> Bool = {
     let res = self:compare(other).
     internal_eq(res, 0)

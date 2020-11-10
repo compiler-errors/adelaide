@@ -340,6 +340,10 @@ Type: Id<PType> = {
 
 ClosureParameterType: Id<PType> = {
     <AssociableType<"">>,
+        
+    <l:@L> <t:AssociableType<"">> "::" <a:TypeName> <h:@R> =>
+        PType::associated_type(Span(file, l, h), t, a).intern(ctx),
+
     <TupleType>,
 
     <l:@L> "_" <h:@R> => PType::infer(Span(file, l, h)).intern(ctx),
@@ -350,6 +354,7 @@ ClosureParameterType: Id<PType> = {
         PType::fn_ptr_type(Span(file, l, h), p, r).intern(ctx),
 };
 
+#[inline]
 AssociableType<Kind>: Id<PType> = {
     // Any type can be accessed with brackets, e.g. `<()>:AssociatedType`
     "<" <Type> ">",
@@ -367,16 +372,9 @@ AssociableType<Kind>: Id<PType> = {
     <l:@L> "Dyn" <tr:MaybeDynTraits> <h:@R> =>
         PType::dynamic_type(Span(file, l, h), tr).intern(ctx),
 
-    <ComplexSubtype<Kind>>,
-};
-
-ComplexSubtype<Kind>: Id<PType> = {
     // Object or enum types, with optional generic. E.g. `Option<Int>`
     <l:@L> <t:TypeNamePath> <g:MaybeGenerics<Kind>> <h:@R> =>
         PType::ambiguous(Span(file, l, h), t, g).intern(ctx),
-
-    <l:@L> <t:AssociableType<Kind>> "::" <a:TypeName> <h:@R> =>
-        PType::associated_type(Span(file, l, h), t, a).intern(ctx),
 };
 
 TupleType: Id<PType> = {
@@ -411,9 +409,9 @@ MaybeGenericsOrAssoc = {
     () => vec![],
 };
 
-TypeOrBinding: Either<Id<PType>, (Id<str>, Id<PType>)> = {
+TypeOrBinding: Either<Id<PType>, (Span, Id<str>, Id<PType>)> = {
     <Type> => Either::Left(<>),
-    <TypeName> "=" <Type> => Either::Right((<>)),
+    <l:@L> <n:TypeName> <h:@R> "=" <t:Type> => Either::Right((Span(file, l, h), n, t)),
 };
 
 MaybeReturn: Id<PType> = {
@@ -550,7 +548,7 @@ ControlFlowExpression<Kind>: Id<PExpression> = {
 
 BaseExpression<Kind>: Id<PExpression> = {
     // Any expression that can be on the LHS of the `()` operator, e.g. `Call` trait
-    <CallableExpression>,
+    <CallableExpression<Kind>>,
     // Array access syntax. Even non-callable base expressions can be accessed.
     <l:@L> <c:BaseExpression<Kind>> "[" <i:Expression> "]" <h:@R> =>
         PExpression::index(Span(file, l, h), c, i).intern(ctx),
@@ -567,14 +565,16 @@ BaseExpression<Kind>: Id<PExpression> = {
     // Await operator
     <l:@L> <ex:BaseExpression<Kind>> ":" "await" <h:@R> => PExpression::await_expr(Span(file, l, h), ex).intern(ctx),
     // Enum or struct constructor
-    <l:@L> <o:ComplexSubtype<"Expr">> <a:ConstructorArguments<Kind>> <h:@R> =>
-        PExpression::structural(Span(file, l, h), o, a).intern(ctx),
+    <l:@L> <t:TypeNamePath> <g:MaybeGenerics<"Expr">> <a:ConstructorArguments<Kind>> <h:@R> =>
+    PExpression::structural_ambiguous(Span(file, l, h), t, g, a).intern(ctx),
+    <l:@L> <t:TypeNamePath> <g:MaybeGenerics<"Expr">> "::" <v:TypeName> <a:ConstructorArguments<Kind>> <h:@R> =>
+        PExpression::structural_variant(Span(file, l, h), t, g, v, a).intern(ctx),
     // Object allocation, e.g. `allocate Box { item: 1 }`
-    <l:@L> "allocate" <o:ComplexSubtype<"Expr">> <a:ConstructorArguments<Kind>> <h:@R> =>
-        PExpression::allocate(Span(file, l, h), o, a).intern(ctx),
+    <l:@L> "allocate" <t:TypeNamePath> <g:MaybeGenerics<"Expr">> <a:ConstructorArguments<Kind>> <h:@R> =>
+        PExpression::allocate(Span(file, l, h), t, g, a).intern(ctx),
 };
 
-CallableExpression: Id<PExpression> = {
+CallableExpression<Kind>: Id<PExpression> = {
     "(" <Expression> ")",
     <TupleExpression>,
     <IdentifierExpression>,
@@ -590,7 +590,7 @@ CallableExpression: Id<PExpression> = {
         PExpression::array_literal(Span(file, l, h), e).intern(ctx),
     <l:@L> <s:InterpolateBegin> <s2:InterpolateBody> <h:@R> =>
         PExpression::interpolation_begin(Span(file, l, h), s, s2).intern(ctx),
-    <l:@L> <c:CallableExpression> "(" <p:CommaTrailingOrEmpty<Expression>> ")" <h:@R> =>
+    <l:@L> <c:CallableExpression<Kind>> "(" <p:CommaTrailingOrEmpty<Expression>> ")" <h:@R> =>
         PExpression::expr_call(Span(file, l, h), c, p).intern(ctx),
     <l:@L> <t:AssociableType<"Expr">> "::" <f:Identifier> <g:MaybeColonGenerics> "(" <p:CommaTrailingOrEmpty<Expression>> ")" <h:@R> =>
         PExpression::static_call(Span(file, l, h), t, f, g, p).intern(ctx),
@@ -715,8 +715,10 @@ Pattern: Id<PPattern> = {
     <l:@L> "(" <v:(<Pattern> ",")+> <e:Pattern?> ")" <t:MaybePatternType> <h:@R> =>
         PPattern::tuple(Span(file, l, h), t, append_maybe(v, e)).intern(ctx),
     // Enum constructor tuple patterns
-    <l:@L> <o:ComplexSubtype<"Expr">> <a:PatternConstructorArguments> <t:MaybePatternType> <h:@R> =>
-        PPattern::structural(Span(file, l, h), t, o, a).intern(ctx),
+    <l:@L> <p:TypeNamePath> <g:MaybeGenerics<"Expr">> <a:PatternConstructorArguments> <t:MaybePatternType> <h:@R> =>
+    PPattern::structural_ambiguous(Span(file, l, h), t, p, g, a).intern(ctx),
+    <l:@L> <p:TypeNamePath> <g:MaybeGenerics<"Expr">> "::" <v:TypeName> <a:PatternConstructorArguments> <t:MaybePatternType> <h:@R> =>
+        PPattern::structural_variant(Span(file, l, h), t, p, g, v, a).intern(ctx),
 };
 
 MaybePatternType: Id<PType> = {

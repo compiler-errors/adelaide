@@ -90,8 +90,8 @@ impl LUseItem {
 
 #[derive(Clone, Debug, Hash, Eq, PartialEq)]
 pub enum LUseError {
-    Missing(Id<PModule>, Id<str>, Span),
-    MissingVariant(Span, Id<PEnum>, Id<str>),
+    MissingItem(Id<PModule>, Id<str>, Span),
+    MissingIn(&'static str, Id<str>, Span, &'static str, Id<str>, Span),
     Cycle(Vec<Span>, Id<str>),
     Error(AError),
     NotAModule(LUseItem, Span),
@@ -170,7 +170,8 @@ fn insert_base_item(
     if let Some(old) = map.insert(name, i) {
         let (what_old, _, span_old) = old.info(ctx);
 
-        Err(AError::ModuleDuplicateItem(
+        Err(AError::Duplicated(
+            "item",
             span,
             what,
             span_old,
@@ -291,7 +292,7 @@ fn lookup_item_early_deep(
                                     vec![(span, name)].into(),
                                     seen,
                                 )
-                                .map_err(|_| LUseError::Missing(m, name, span))?;
+                                .map_err(|_| LUseError::MissingItem(m, name, span))?;
                             }
 
                             seen.insert((m, name), Ok(current_item.clone()));
@@ -306,7 +307,9 @@ fn lookup_item_early_deep(
                 if info.variants.iter().any(|(_, n, _)| n == &name) {
                     current_item = LUseItem::EnumVariant(e, name);
                 } else {
-                    return Err(LUseError::MissingVariant(span, e, name));
+                    return Err(LUseError::MissingIn(
+                        "enum", info.name, info.span, "variant", name, span,
+                    ));
                 }
             },
             _ => {
@@ -322,7 +325,7 @@ fn lookup_item_early_deep(
 pub fn lookup_item_early_deep_relative(
     ctx: &dyn AdelaideContext,
     module: Option<Id<PModule>>,
-    mut path: VecDeque<(Span, Id<str>)>,
+    path: VecDeque<(Span, Id<str>)>,
     seen: &mut HashMap<(Id<PModule>, Id<str>), LUseResult>,
 ) -> LUseResult {
     debug!(
@@ -340,7 +343,7 @@ pub fn lookup_item_early_deep_relative(
         None
     };
 
-    match lookup_item_early_deep(ctx, LUseItem::Module(ctx.parse_root()?), path.clone(), seen) {
+    match lookup_item_early_deep(ctx, LUseItem::Module(ctx.parse_root()?), path, seen) {
         Ok(i) => Ok(i),
         Err(e) => Err(original_error.unwrap_or(e)),
     }
@@ -462,7 +465,8 @@ fn insert_late_item(
         let (what, _, _) = item.info(ctx);
         let (what_old, _, _) = items.get(&name).unwrap().info(ctx);
 
-        return Err(AError::ModuleDuplicateItem(
+        return Err(AError::Duplicated(
+            "item",
             span,
             what,
             span_old,
@@ -488,33 +492,5 @@ pub fn lookup_item(
     items
         .get(&name)
         .copied()
-        .ok_or_else(|| LUseError::Missing(module, name, span).into())
-}
-
-/// --- Temporary testing code --- ///
-
-pub fn check_mod(ctx: &dyn AdelaideContext) -> AResult<()> {
-    lower_test_single(ctx, ctx.parse_root()?)
-}
-
-fn lower_test_single(ctx: &dyn AdelaideContext, key: Id<PModule>) -> AResult<()> {
-    let info = key.lookup(ctx);
-
-    for i in &info.items {
-        match i {
-            PItem::Module(m) => {
-                lower_test_single(ctx, *m)?;
-            },
-            _ => {},
-        }
-    }
-
-    let lowered = ctx.mod_items(key)?;
-    println!(
-        "Module {}:\n{:#?}\n",
-        info.name.lookup(ctx),
-        Pretty(lowered, ctx)
-    );
-
-    Ok(())
+        .ok_or_else(|| LUseError::MissingItem(module, name, span).into())
 }

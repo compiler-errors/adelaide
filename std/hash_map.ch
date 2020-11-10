@@ -130,8 +130,6 @@ impl<K, V> Deref<K> for HashMap<K, V> where K: Equals<K> + Hash {
 }
 
 impl<K, V> DerefAssign<K> for HashMap<K, V> where K: Equals<K> + Hash {
-  type Value = V.
-
   fn deref_assign(self, idx: K, value: V) -> V = {
     self:put(idx, value).
     value

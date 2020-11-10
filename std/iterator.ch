@@ -92,7 +92,7 @@ impl<T> Self for T where T: Iterator, <Self as Iterator>::Item: Default + Add<<S
   fn sum(self) -> <Self as Iterator>::Item =
     Self::fold(
       self,
-      <Self as Iterator>::Item:default(),
+      <<Self as Iterator>::Item>::default(),
       |a, b| a + b).
 }
 

@@ -9,9 +9,7 @@ pub struct LId<T: LateLookup + ?Sized>(pub Id<T::Source>, SyncOnceCell<Id<T>>);
 
 impl<T: LateLookup + Lookup + ?Sized> LId<T> {
     pub fn lookup(&self, ctx: &dyn AdelaideContext) -> Arc<T> {
-        self.1
-            .get_or_init(|| T::late_lookup(self.0, ctx))
-            .lookup(ctx)
+        self.get(ctx).lookup(ctx)
     }
 
     pub fn get(&self, ctx: &dyn AdelaideContext) -> Id<T> {

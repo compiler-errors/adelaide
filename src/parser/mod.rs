@@ -28,7 +28,7 @@ pub fn parse_mod(ctx: &dyn AdelaideContext, file_id: Id<AFile>) -> AResult<Id<PM
         name.intern(ctx)
     } else {
         // Root
-        "<root>".intern(ctx)
+        ctx.static_name("<root>")
     };
 
     let lexer = Lexer::new(ctx, file_id, &raw_mod.contents).map(|s| match s {
