@@ -553,15 +553,15 @@ BaseExpression<Kind>: Id<PExpression> = {
     <l:@L> <c:BaseExpression<Kind>> "[" <i:Expression> "]" <h:@R> =>
         PExpression::index(Span(file, l, h), c, i).intern(ctx),
     // An object-access or object-call
-    <l:@L> <e:BaseExpression<Kind>> ":" <id:Identifier> <c:MaybeObjectCall> <h:@R> => match c {
+    <l:@L> <e:BaseExpression<Kind>> ":" <il:@L> <id:Identifier> <ih:@L> <c:MaybeObjectCall> <h:@R> => match c {
         None =>
-            PExpression::named_access(Span(file, l, h), e, id).intern(ctx),
+            PExpression::named_access(Span(file, l, h), e, Span(file, il, ih), id).intern(ctx),
         Some((generics, args)) =>
             PExpression::object_call(Span(file, l, h), e, id, generics, args).intern(ctx),
     },
     // Tuple access, e.g. `(1, 2):0`
-    <l:@L> <e:BaseExpression<Kind>> ":" <id:Integer> <h:@R> =>
-        PExpression::index_access(Span(file, l, h), e, id).intern(ctx),
+    <l:@L> <e:BaseExpression<Kind>> ":" <il:@L> <id:Integer> <h:@R> =>
+        PExpression::index_access(Span(file, l, h), e, Span(file, il, h), id).intern(ctx),
     // Await operator
     <l:@L> <ex:BaseExpression<Kind>> ":" "await" <h:@R> => PExpression::await_expr(Span(file, l, h), ex).intern(ctx),
     // Enum or struct constructor

@@ -12,8 +12,9 @@ use crate::{
     ctx::AdelaideContext,
     lexer::Span,
     parser::{
-        PBinopKind, PEnum, PExpression, PExpressionData, PFunction, PGlobal, PImpl, PLiteral,
-        PModule, PObject, PPattern, PStatement, PTrait, PTraitMember, PTraitType, PType, PTypeData,
+        PBinopKind, PConstructorArguments, PEnum, PExpression, PExpressionData, PFunction, PGlobal,
+        PImpl, PLiteral, PModule, PObject, PPattern, PPatternConstructorArguments, PPatternData,
+        PStatement, PStatementData, PTrait, PTraitMember, PTraitType, PType, PTypeData,
     },
     util::{AError, AResult, Id, Intern, LId, LateLookup},
 };
@@ -299,7 +300,7 @@ impl<'ctx> LoweringContext<'ctx> {
                 self.lower_tys(es, infer_allowed)?,
                 self.lower_ty(*r, infer_allowed)?,
             ),
-            PTypeData::Elaborated(_, _) => todo!("Die"),
+            PTypeData::Elaborated(..) => todo!("Die"),
             PTypeData::Int => LType::Int,
             PTypeData::Float => LType::Float,
             PTypeData::Char => LType::Char,
@@ -415,6 +416,7 @@ impl<'ctx> LoweringContext<'ctx> {
 
                 let generics =
                     vec![LType::Tuple(self.lower_tys(params, infer_allowed)?).intern(self.ctx)];
+
                 let bounds = btreemap! { self.ctx.static_name("Ret") => self.lower_ty(*ret, infer_allowed)? };
 
                 Ok(LTraitType {
@@ -508,7 +510,9 @@ impl<'ctx> LoweringContext<'ctx> {
 
                     data
                 },
-                (span, i, _) => todo!("Die: Cannot access $what $item as an expression"),
+                (span, i, _) => {
+                    todo!("Die: Cannot access $what $item as an expression")
+                },
             },
             PExpressionData::SelfRef => {
                 if let LScopeItem::Variable(v) =
@@ -647,9 +651,72 @@ impl<'ctx> LoweringContext<'ctx> {
                 let e = self.lower_expr(*e)?;
                 self.std_static_call(None, "Negate", vec![], "negate", vec![], vec![e])
             },
-            PExpressionData::InterpolationBegin(_, _) => todo!(),
-            PExpressionData::InterpolationContinue(_, _, _) => todo!(),
-            PExpressionData::InterpolationEnd(_, _) => todo!(),
+            PExpressionData::InterpolationBegin(l, s) => {
+                let string = LType::String.intern(self.ctx);
+                let l = LExpression {
+                    source: e,
+                    span: *span,
+                    data: LExpressionData::Literal(PLiteral::String(*l)),
+                }
+                .intern(self.ctx);
+                let s = self.lower_expr(*s)?;
+
+                self.std_static_call(Some(string), "Add", vec![string], "add", vec![], vec![l, s])
+            },
+            PExpressionData::InterpolationContinue(a, l, s) => {
+                let string = LType::String.intern(self.ctx);
+                let l = LExpression {
+                    source: e,
+                    span: *span,
+                    data: LExpressionData::Literal(PLiteral::String(*l)),
+                }
+                .intern(self.ctx);
+                let a = LExpression {
+                    source: e,
+                    span: *span,
+                    data: self.std_static_call(None, "into", vec![string], "into", vec![], vec![
+                        self.lower_expr(*a)?,
+                    ]),
+                }
+                .intern(self.ctx);
+                let al = LExpression {
+                    source: e,
+                    span: *span,
+                    data: self.std_static_call(
+                        Some(string),
+                        "Add",
+                        vec![string],
+                        "add",
+                        vec![],
+                        vec![a, l],
+                    ),
+                }
+                .intern(self.ctx);
+                let s = self.lower_expr(*s)?;
+
+                self.std_static_call(Some(string), "Add", vec![string], "add", vec![], vec![
+                    al, s,
+                ])
+            },
+            PExpressionData::InterpolationEnd(a, l) => {
+                let string = LType::String.intern(self.ctx);
+                let l = LExpression {
+                    source: e,
+                    span: *span,
+                    data: LExpressionData::Literal(PLiteral::String(*l)),
+                }
+                .intern(self.ctx);
+                let a = LExpression {
+                    source: e,
+                    span: *span,
+                    data: self.std_static_call(None, "into", vec![string], "into", vec![], vec![
+                        self.lower_expr(*a)?,
+                    ]),
+                }
+                .intern(self.ctx);
+
+                self.std_static_call(Some(string), "Add", vec![string], "add", vec![], vec![a, l])
+            },
             PExpressionData::Call(c, ps) => {
                 let c = self.lower_expr(*c)?;
                 let ps = LExpression {
@@ -689,7 +756,20 @@ impl<'ctx> LoweringContext<'ctx> {
                 self.lower_expr(*t)?,
                 self.lower_expr(*e)?,
             ),
-            PExpressionData::IfLet(p, v, t, e) => todo!(),
+            PExpressionData::IfLet(p, v, t, e) =>
+                LExpressionData::Match(self.lower_expr(*v)?, vec![
+                    (self.lower_pattern(*p)?, self.lower_expr(*t)?),
+                    (
+                        LPattern {
+                            source: None,
+                            span: *span,
+                            data: LPatternData::Underscore,
+                            ty: self.fresh_infer_ty(),
+                        }
+                        .intern(self.ctx),
+                        self.lower_expr(*e)?,
+                    ),
+                ]),
             PExpressionData::While(l, p, t, e) => {
                 self.enter_block();
                 let i = self.declare_label(*l);
@@ -700,10 +780,7 @@ impl<'ctx> LoweringContext<'ctx> {
 
                 LExpressionData::While(i, p, t, e)
             },
-            PExpressionData::For(l, p, es, t, e) => {
-                //self.lower_expr_for(*l, *p, *es, *t, *e)
-                todo!()
-            },
+            PExpressionData::For(l, p, es, t, e) => self.lower_expr_for(*l, *p, *es, *t, *e),
             PExpressionData::Match(e, ps) => {
                 let m = self.lower_expr(*e)?;
 
@@ -728,24 +805,22 @@ impl<'ctx> LoweringContext<'ctx> {
                     let g = self.lower_tys(g, true)?;
                     let g = self.check_generics_parity(*span, g, info.generics.len(), true)?;
 
-                    let s = self.ctx.get_object_constructor_shape(o);
-                    let a = self.check_constructor_shape(a, s)?;
+                    let s = self.ctx.object_constructor(o)?;
+                    let a = self.lower_constructor(&s, a)?;
 
                     LExpressionData::StructConstructor(o.into(), g, a)
                 },
                 LScopeItem::EnumVariant(e, v) => {
-                    let g = self.lower_tys(g, true)?;
-                    let g = self.check_generics_parity(
-                        *span,
-                        g,
-                        e.lookup(self.ctx).generics.len(),
-                        true,
-                    )?;
+                    if !g.is_empty() {
+                        todo!("Die")
+                    }
 
-                    let s = self.ctx.get_enum_variant_constructor(e, v);
-                    let a = self.lower_constructor(a, s)?;
+                    let g = self.fresh_infer_tys(e.lookup(self.ctx).generics.len());
 
-                    LExpressionData::EnumConstructor(e.into(), g, v, a);
+                    let s = self.ctx.enum_variant_constructor(e, v)?;
+                    let a = self.lower_constructor(&s, a)?;
+
+                    LExpressionData::EnumConstructor(e.into(), g, v, a)
                 },
                 _ => todo!("Die"),
             },
@@ -759,10 +834,10 @@ impl<'ctx> LoweringContext<'ctx> {
                         true,
                     )?;
 
-                    let s = self.ctx.get_enum_variant_constructor(e, v);
-                    let a = self.lower_constructor(a, s)?;
+                    let s = self.ctx.enum_variant_constructor(e, *v)?;
+                    let a = self.lower_constructor(&s, a)?;
 
-                    LExpressionData::EnumConstructor(e.into(), g, v, a);
+                    LExpressionData::EnumConstructor(e.into(), g, *v, a)
                 },
                 _ => todo!("Die"),
             },
@@ -772,12 +847,11 @@ impl<'ctx> LoweringContext<'ctx> {
                     if info.is_structural {
                         todo!("Die")
                     }
-
                     let g = self.lower_tys(g, true)?;
                     let g = self.check_generics_parity(*span, g, info.generics.len(), true)?;
 
-                    let s = self.ctx.get_object_constructor_shape(o);
-                    let a = self.check_constructor_shape(a, s)?;
+                    let s = self.ctx.object_constructor(o)?;
+                    let a = self.lower_constructor(&s, a)?;
 
                     LExpressionData::ObjectAllocation(o.into(), g, a)
                 },
@@ -785,29 +859,53 @@ impl<'ctx> LoweringContext<'ctx> {
             },
             PExpressionData::Return(v) =>
                 if self.scopes.last_mut().unwrap().return_allowed {
-                    LExpressionData::Return(self.lower_expr(v)?)
+                    LExpressionData::Return(self.lower_expr(*v)?)
                 } else {
                     todo!("Die")
                 },
             PExpressionData::Assert(v) => {
                 if let LScopeItem::Function(assert) = self.lookup_std_item("assert") {
-                    LExpressionData::Call(assert.into(), vec![], self.lower_expr(v)?)
+                    LExpressionData::Call(assert.into(), vec![], vec![self.lower_expr(*v)?])
                 } else {
                     unreachable!()
                 }
             },
-            PExpressionData::Break(_, _) => todo!(),
-            PExpressionData::Continue(_) => todo!(),
+            PExpressionData::Break(b, l) => {
+                // TODO: This is a lot of work, it's kinda gross...
+                let e = if let Some(e) = b {
+                    self.lower_expr(*e)?
+                } else {
+                    LExpression {
+                        source: e,
+                        span: *span,
+                        data: LExpressionData::Tuple(vec![]),
+                    }
+                    .intern(self.ctx)
+                };
+
+                let s = l.map_or(*span, |(s, _)| s);
+                let l = l.map(|(_, l)| l);
+
+                LExpressionData::Break(self.lookup_label(s, l)?, e)
+            },
+            PExpressionData::Continue(l) => {
+                let s = l.map_or(*span, |(s, _)| s);
+                let l = l.map(|(_, l)| l);
+
+                LExpressionData::Continue(self.lookup_label(s, l)?)
+            },
             PExpressionData::Closure(ps, r, e) => {
                 self.enter_context(true, false);
+
                 let ps = self.lower_patterns(ps)?;
                 let e = self.lower_expr(*e)?;
                 let r = self.lower_ty(*r, true)?;
+
                 let vcx = self.exit_context();
 
                 LExpressionData::Closure(vcx, ps, r, e)
             },
-            PExpressionData::Throw(_) => todo!(),
+            PExpressionData::Throw(t) => self.lower_expr_throw(e, *span, *t)?,
             PExpressionData::Index(a, i) => {
                 let a = self.lower_expr(*a)?;
                 let i = self.lower_expr(*i)?;
@@ -820,9 +918,16 @@ impl<'ctx> LoweringContext<'ctx> {
                     vec![a, i],
                 )
             },
-            PExpressionData::NamedAccess(o, i) => LExpressionData::Access(self.lower_expr(*o)?, *i),
-            PExpressionData::IndexAccess(o, i) =>
-                LExpressionData::IndexAccess(self.lower_expr(*o)?, *i),
+            PExpressionData::NamedAccess(o, span, i) =>
+                LExpressionData::Access(self.lower_expr(*o)?, *span, *i),
+            PExpressionData::IndexAccess(o, span, i) => {
+                let i = i
+                    .lookup(self.ctx)
+                    .parse()
+                    .map_err(|e| AError::NotANumber("tuple index", *span, *i))?;
+
+                LExpressionData::IndexAccess(self.lower_expr(*o)?, *span, i)
+            },
             PExpressionData::Await(a) => {
                 if !self.scopes.last().unwrap().await_allowed {
                     todo!("Die")
@@ -871,11 +976,9 @@ impl<'ctx> LoweringContext<'ctx> {
 
     fn lower_exprs(&mut self, es: &[Id<PExpression>]) -> AResult<Vec<Id<LExpression>>> {
         let mut ret = vec![];
-
         for e in es {
             ret.push(self.lower_expr(*e)?);
         }
-
         Ok(ret)
     }
 
@@ -887,29 +990,301 @@ impl<'ctx> LoweringContext<'ctx> {
         accesses: &[(Span, Id<str>)],
     ) -> AResult<LExpressionData> {
         for (a_span, a) in accesses {
-            data = LExpressionData::Access(LExpression { source, span, data }.intern(self.ctx), *a);
+            data = LExpressionData::Access(
+                LExpression { source, span, data }.intern(self.ctx),
+                *a_span,
+                *a,
+            );
             span = span.unite(*a_span);
         }
 
         Ok(data)
     }
 
-    fn lower_statement(&mut self, s: Id<PStatement>) -> AResult<Id<LStatement>> {
+    fn lower_expr_for() -> AResult<LExpressionData> {
         todo!()
+    }
+
+    fn lower_expr_throw(
+        &self,
+        source: Id<PExpression>,
+        span: Span,
+        throwable: Id<PExpression>,
+    ) -> AResult<LExpressionData> {
+        let throwable = self.lower_expr(throwable)?;
+
+        let good_ty = self.fresh_infer_ty();
+        let bad_ty = self.fresh_infer_ty();
+
+        let result_enum = if let LScopeItem::Enum(result_enum) = self.lookup_std_item("Result") {
+            result_enum
+        } else {
+            unreachable!()
+        };
+
+        self.enter_block();
+
+        let good_var = self.declare_variable(
+            fresh_name("try").intern(self.ctx),
+            span,
+            self.fresh_infer_ty(),
+        );
+        let bad_var = self.declare_variable(
+            fresh_name("try").intern(self.ctx),
+            span,
+            self.fresh_infer_ty(),
+        );
+
+        let good_name = LPattern {
+            source: None,
+            span,
+            ty: self.fresh_infer_ty(),
+            data: LPatternData::Variable(good_var),
+        }
+        .intern(self.ctx);
+        let good_pattern = LPattern {
+            source: None,
+            span,
+            ty: self.fresh_infer_ty(),
+            data: LPatternData::EnumVariantPattern(
+                result_enum.into(),
+                vec![good_ty, bad_ty],
+                self.ctx.static_name("Ok"),
+                vec![good_name],
+            ),
+        }
+        .intern(self.ctx);
+        let good_value = LExpression {
+            source,
+            span,
+            data: LExpressionData::Variable(good_var),
+        }
+        .intern(self.ctx);
+        let bad_pattern = LPattern {
+            source: None,
+            span,
+            ty: self.fresh_infer_ty(),
+            data: LPatternData::Variable(good_var),
+        }
+        .intern(self.ctx);
+        let bad_path = LExpression {
+            source,
+            span,
+            data: LExpressionData::Return(
+                LExpression {
+                    source,
+                    span,
+                    data: LExpressionData::Variable(bad_var),
+                }
+                .intern(self.ctx),
+            ),
+        }
+        .intern(self.ctx);
+
+        Ok(LExpressionData::Match(throwable, vec![
+            (good_pattern, good_value),
+            (bad_pattern, bad_path),
+        ]))
+    }
+
+    fn lower_constructor(
+        &self,
+        shape: &LConstructorShape,
+        args: &PConstructorArguments,
+    ) -> AResult<Vec<(usize, Id<LExpression>)>> {
+        match (shape, args) {
+            (LConstructorShape::Empty(_), PConstructorArguments::Empty(_)) => Ok(vec![]),
+            (LConstructorShape::Positional(s, n), PConstructorArguments::Positional(s2, es)) =>
+                if es.len() == *n {
+                    Ok(self.lower_exprs(es)?.into_iter().enumerate().collect())
+                } else {
+                    todo!("Die")
+                },
+            (LConstructorShape::Named(s, expected), PConstructorArguments::Named(s2, given)) => {
+                let seen = hashmap! {};
+                let args = vec![];
+
+                for (is, n, e) in given {
+                    if let Some(old_is) = seen.insert(*n, *is) {
+                        todo!("Die")
+                    }
+                    if let Some((pos, _)) = expected.get(n) {
+                        args.push((*pos, self.lower_expr(*e)?));
+                    } else {
+                        todo!("Die, Unexpected arg n in s2")
+                    }
+                }
+
+                for (n, (_, is)) in expected {
+                    if !seen.contains_key(n) {
+                        todo!("Die, missing arg n in s2")
+                    }
+                }
+
+                Ok(args)
+            },
+        }
+    }
+
+    fn lower_statement(&mut self, s: Id<PStatement>) -> AResult<Id<LStatement>> {
+        let PStatement { span, data } = &*s.lookup(self.ctx);
+        let data = match data {
+            PStatementData::Expression(e) => LStatementData::Expression(self.lower_expr(*e)?),
+            PStatementData::Let(p, e) => {
+                let e = self.lower_expr(*e)?;
+                let p = self.lower_pattern(*p)?;
+
+                LStatementData::Let(p, e)
+            },
+        };
+        Ok(LStatement {
+            source: Some(s),
+            span: *span,
+            data,
+        }
+        .intern(self.ctx))
     }
 
     fn lower_statements(&mut self, ss: &[Id<PStatement>]) -> AResult<Vec<Id<LStatement>>> {
         let mut ret = vec![];
-
         for s in ss {
             ret.push(self.lower_statement(*s)?);
         }
-
         Ok(ret)
     }
 
-    fn lower_pattern(&mut self, s: Id<PPattern>) -> AResult<Id<LPattern>> {
-        todo!()
+    fn lower_pattern(&mut self, p: Id<PPattern>) -> AResult<Id<LPattern>> {
+        let PPattern { span, ty, data } = &*p.lookup(self.ctx);
+        let ty = self.lower_ty(*ty, true)?;
+        let data = match data {
+            PPatternData::Underscore => LPatternData::Underscore,
+            PPatternData::Literal(l) => LPatternData::Literal(*l),
+            PPatternData::Identifier(v) => {
+                let v = self.declare_variable(*v, *span, ty);
+                LPatternData::Variable(v)
+            },
+            PPatternData::Tuple(ps) => LPatternData::Tuple(self.lower_patterns(ps)?),
+            PPatternData::StructuralAmbiguous(p, g, a) => match self.lookup_path(p)? {
+                LScopeItem::Object(o) => {
+                    let info = o.lookup(self.ctx);
+                    if !info.is_structural {
+                        todo!("Die")
+                    }
+
+                    let g = self.lower_tys(g, true)?;
+                    let g = self.check_generics_parity(*span, g, info.generics.len(), true)?;
+
+                    let s = self.ctx.object_constructor(o)?;
+                    let a = self.lower_destructor(&s, a)?;
+
+                    LPatternData::StructPattern(o.into(), g, a)
+                },
+                LScopeItem::EnumVariant(e, v) => {
+                    if !g.is_empty() {
+                        todo!("Die")
+                    }
+
+                    let g = self.fresh_infer_tys(e.lookup(self.ctx).generics.len());
+
+                    let s = self.ctx.enum_variant_constructor(e, v)?;
+                    let a = self.lower_destructor(&s, a)?;
+
+                    LPatternData::EnumVariantPattern(e.into(), g, v, a)
+                },
+                _ => todo!("Die"),
+            },
+            PPatternData::StructuralVariant(p, g, v, a) => match self.lookup_path(p)? {
+                LScopeItem::Enum(e) => {
+                    let g = self.lower_tys(g, true)?;
+                    let g = self.check_generics_parity(
+                        *span,
+                        g,
+                        e.lookup(self.ctx).generics.len(),
+                        true,
+                    )?;
+
+                    let s = self.ctx.enum_variant_constructor(e, *v)?;
+                    let a = self.lower_destructor(&s, a)?;
+
+                    LPatternData::EnumVariantPattern(e.into(), g, *v, a)
+                },
+                _ => todo!("Die"),
+            },
+        };
+        Ok(LPattern {
+            source: Some(p),
+            span: *span,
+            ty,
+            data,
+        }
+        .intern(self.ctx))
+    }
+
+    fn lower_destructor(
+        &mut self,
+        shape: &LConstructorShape,
+        constructor: &PPatternConstructorArguments,
+    ) -> AResult<Vec<Id<LPattern>>> {
+        match (shape, constructor) {
+            (LConstructorShape::Empty(_), PPatternConstructorArguments::Empty(_)) => Ok(vec![]),
+            (
+                LConstructorShape::Positional(s, n),
+                PPatternConstructorArguments::Positional(s2, ps, ignore),
+            ) => {
+                if (!ignore && *n < ps.len()) || (*n > ps.len()) {
+                    todo!("Die")
+                }
+
+                let ps = self.lower_patterns(ps)?;
+                // Extend with any missing members
+                ps.extend((ps.len()..*n).map(|_| self.fresh_empty_pattern(*s2)));
+
+                Ok(ps)
+            },
+            (
+                LConstructorShape::Named(s, expected),
+                PPatternConstructorArguments::Named(s2, given, ignore),
+            ) => {
+                let seen = hashmap! {};
+                let args = vec![];
+
+                for (is, n, p) in given {
+                    if let Some(old_is) = seen.insert(*n, *is) {
+                        todo!("Die")
+                    }
+                    if let Some((pos, _)) = expected.get(n) {
+                        args[*pos] = Some(self.lower_pattern(*p)?);
+                    } else {
+                        todo!("Die, Unexpected arg n in s2")
+                    }
+                }
+
+                if !ignore {
+                    for (n, (_, is)) in expected {
+                        if !seen.contains_key(n) {
+                            todo!("Die, missing arg n in s2")
+                        }
+                    }
+                }
+
+                // Unwrap each None hole into an `_` pattern
+                Ok(args
+                    .into_iter()
+                    .map(|p| p.unwrap_or_else(|| self.fresh_empty_pattern(*s2)))
+                    .collect())
+            },
+            _ => todo!("Die"),
+        }
+    }
+
+    fn fresh_empty_pattern(&self, span: Span) -> Id<LPattern> {
+        LPattern {
+            span,
+            source: None,
+            ty: self.fresh_infer_ty(),
+            data: LPatternData::Underscore,
+        }
+        .intern(self.ctx)
     }
 
     fn lower_patterns(&mut self, ps: &[Id<PPattern>]) -> AResult<Vec<Id<LPattern>>> {
@@ -922,6 +1297,25 @@ impl<'ctx> LoweringContext<'ctx> {
         Ok(ret)
     }
 
+    fn declare_variable(&mut self, name: Id<str>, span: Span, ty: Id<LType>) -> LVariable {
+        let var = LVariable {
+            id: fresh_id(),
+            name,
+            span,
+            ty,
+        };
+
+        self.scopes
+            .last_mut()
+            .unwrap()
+            .variable_scopes
+            .last_mut()
+            .unwrap()
+            .insert(name, var);
+
+        var
+    }
+
     fn declare_label(&mut self, label: Option<Id<str>>) -> usize {
         let label = label.unwrap_or_else(|| fresh_name("LABEL").intern(self.ctx));
         let id = fresh_id();
@@ -930,11 +1324,18 @@ impl<'ctx> LoweringContext<'ctx> {
             .last_mut()
             .unwrap()
             .label_scopes
-            .last_mut()
-            .unwrap()
-            .insert(label, id);
-
+            .push((label, id));
         id
+    }
+
+    fn lookup_label(&mut self, s: Span, l: Option<Id<str>>) -> AResult<usize> {
+        for (n, i) in self.scopes.last_mut().unwrap().label_scopes.iter().rev() {
+            if l.map_or(true, |l| l == *n) {
+                return Ok(*i);
+            }
+        }
+
+        todo!("Die")
     }
 
     fn check_generics_parity(
@@ -968,7 +1369,7 @@ impl<'ctx> LoweringContext<'ctx> {
                     bound.into(),
                     self.fresh_infer_tys(1),
                     self.ctx.static_name(kind),
-                    es,
+                    es.into_iter().enumerate().collect(),
                 ),
             }
             .intern(self.ctx)
@@ -1002,7 +1403,7 @@ struct FunctionScope {
     return_allowed: bool,
     await_allowed: bool,
     variable_scopes: Vec<HashMap<Id<str>, LVariable>>,
-    label_scopes: Vec<HashMap<Id<str>, usize>>,
+    label_scopes: Vec<(Id<str>, usize)>,
     vcx: LVariableContext,
 }
 
@@ -1065,22 +1466,17 @@ pub struct LVariable {
 #[derive(Debug, Hash, Eq, PartialEq, Lookup, PrettyPrint)]
 pub enum LType {
     Infer(usize),
-
     Int,
     Float,
     Char,
     Bool,
     String,
     SelfType,
-
     Array(Id<LType>),
     Tuple(Vec<Id<LType>>),
-
     Closure(Vec<Id<LType>>, Id<LType>),
     FnPtr(Vec<Id<LType>>, Id<LType>),
-
     Dynamic(Vec<Id<LTraitType>>),
-
     Object(LId<LObject>, Vec<Id<LType>>),
     Enum(LId<LEnum>, Vec<Id<LType>>),
     Associated(Id<LType>, Option<Id<LTraitType>>, Id<str>),
@@ -1110,7 +1506,8 @@ enum LExpressionData {
     AsyncBlock(LVariableContext, Id<LExpression>),
     Global(LId<LGlobal>),
     GlobalFunction(LId<LFunction>, Vec<Id<LType>>),
-    Access(Id<LExpression>, Id<str>),
+    Access(Id<LExpression>, Span, Id<str>),
+    IndexAccess(Id<LExpression>, Span, usize),
     Tuple(Vec<Id<LExpression>>),
     ArrayLiteral(Vec<Id<LExpression>>),
     Assign(Id<LExpression>, Id<LExpression>),
@@ -1121,10 +1518,21 @@ enum LExpressionData {
         Vec<Id<LType>>,
         Vec<Id<LExpression>>,
     ),
+    Call(LId<LFunction>, Vec<Id<LType>>, Vec<Id<LExpression>>),
     Or(Id<LExpression>, Id<LExpression>),
     And(Id<LExpression>, Id<LExpression>),
     Await(Id<LExpression>),
-    EnumConstructor(LId<LEnum>, Vec<Id<LType>>, Id<str>, Vec<Id<LExpression>>),
+    Return(Id<LExpression>),
+    Break(usize, Id<LExpression>),
+    Continue(usize),
+    StructConstructor(LId<LObject>, Vec<Id<LType>>, Vec<(usize, Id<LExpression>)>),
+    ObjectAllocation(LId<LObject>, Vec<Id<LType>>, Vec<(usize, Id<LExpression>)>),
+    EnumConstructor(
+        LId<LEnum>,
+        Vec<Id<LType>>,
+        Id<str>,
+        Vec<(usize, Id<LExpression>)>,
+    ),
     Closure(
         LVariableContext,
         Vec<Id<LPattern>>,
@@ -1137,10 +1545,37 @@ enum LExpressionData {
 }
 
 #[derive(Debug, Hash, Eq, PartialEq, Lookup, PrettyPrint)]
-pub struct LStatement {}
+pub struct LStatement {
+    #[plain]
+    source: Option<Id<PStatement>>,
+    span: Span,
+    data: LStatementData,
+}
+
+#[derive(Debug, Hash, Eq, PartialEq, PrettyPrint)]
+enum LStatementData {
+    Expression(Id<LExpression>),
+    Let(Id<LPattern>, Id<LExpression>),
+}
 
 #[derive(Debug, Hash, Eq, PartialEq, Lookup, PrettyPrint)]
-pub struct LPattern {}
+pub struct LPattern {
+    #[plain]
+    source: Option<Id<PPattern>>,
+    span: Span,
+    ty: Id<LType>,
+    data: LPatternData,
+}
+
+#[derive(Debug, Hash, Eq, PartialEq, PrettyPrint)]
+enum LPatternData {
+    Underscore,
+    Literal(PLiteral),
+    Variable(LVariable),
+    Tuple(Vec<Id<LPattern>>),
+    EnumVariantPattern(LId<LEnum>, Vec<Id<LType>>, Id<str>, Vec<Id<LPattern>>),
+    StructPattern(LId<LObject>, Vec<Id<LType>>, Vec<Id<LPattern>>),
+}
 
 #[derive(Debug, Hash, Eq, PartialEq, Lookup, PrettyPrint)]
 pub struct LGlobal {
@@ -1354,4 +1789,64 @@ pub fn get_bound_names(
     }
 
     Ok(Arc::new(bounds))
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum LConstructorShape {
+    Empty(Span),
+    Positional(Span, usize),
+    Named(Span, HashMap<Id<str>, (usize, Span)>),
+}
+
+pub fn object_constructor(
+    ctx: &dyn AdelaideContext,
+    o: Id<PObject>,
+) -> AResult<Arc<LConstructorShape>> {
+    let data = match &o.lookup(ctx).members {
+        crate::parser::PObjectMembers::Empty(s) => LConstructorShape::Empty(*s),
+        crate::parser::PObjectMembers::Positional(s, n) =>
+            LConstructorShape::Positional(*s, n.len()),
+        crate::parser::PObjectMembers::Named(s, es) => {
+            let mut members = hashmap! {};
+
+            for (i, (s, n, _)) in es.iter().enumerate() {
+                if let Some(old_s) = members.insert(*n, (i, *s)) {
+                    todo!("Die")
+                }
+            }
+
+            LConstructorShape::Named(*s, members)
+        },
+    };
+    Ok(Arc::new(data))
+}
+
+pub fn enum_variant_constructor(
+    ctx: &dyn AdelaideContext,
+    e: Id<PEnum>,
+    v: Id<str>,
+) -> AResult<Arc<LConstructorShape>> {
+    for (span, variant, members) in &e.lookup(ctx).variants {
+        if *variant == v {
+            let data = match members {
+                crate::parser::PObjectMembers::Empty(s) => LConstructorShape::Empty(*s),
+                crate::parser::PObjectMembers::Positional(s, n) =>
+                    LConstructorShape::Positional(*s, n.len()),
+                crate::parser::PObjectMembers::Named(s, es) => {
+                    let mut members = hashmap! {};
+
+                    for (i, (s, n, _)) in es.iter().enumerate() {
+                        if let Some(old_s) = members.insert(*n, (i, *s)) {
+                            todo!("Die")
+                        }
+                    }
+
+                    LConstructorShape::Named(*s, members)
+                },
+            };
+
+            return Ok(Arc::new(data));
+        }
+    }
+    todo!("Die, no variant")
 }

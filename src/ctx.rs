@@ -10,8 +10,8 @@ use crate::{
     file::AFile,
     lexer::Span,
     lowering::{
-        LEarlyContext, LEnum, LExpression, LFunction, LGlobal, LImpl, LModule, LObject, LPattern,
-        LScopeItem, LStatement, LTrait, LTraitType, LType, LUseItem, LUseResult,
+        LConstructorShape, LEarlyContext, LEnum, LExpression, LFunction, LGlobal, LImpl, LModule,
+        LObject, LPattern, LScopeItem, LStatement, LTrait, LTraitType, LType, LUseItem, LUseResult,
     },
     parser::{
         PEnum, PExpression, PFunction, PGlobal, PImpl, PModule, PObject, PPattern, PStatement,
@@ -167,6 +167,13 @@ pub trait AdelaideContext: salsa::Database {
     fn get_bound_names(&self, tr: Id<PTrait>) -> AResult<Arc<HashMap<Id<str>, Span>>>;
 
     fn static_name(&self, name: &'static str) -> Id<str>;
+
+    #[salsa::invoke(crate::lowering::object_constructor)]
+    fn object_constructor(&self, e: Id<PObject>) -> AResult<Arc<LConstructorShape>>;
+
+    #[salsa::invoke(crate::lowering::enum_variant_constructor)]
+    fn enum_variant_constructor(&self, e: Id<PEnum>, v: Id<str>)
+        -> AResult<Arc<LConstructorShape>>;
 
     // ------ TYPECHECKER ------ //
 

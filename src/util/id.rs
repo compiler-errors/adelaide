@@ -73,6 +73,7 @@ impl<T: ?Sized> Debug for Id<T> {
 
 impl<T: Lookup + PrettyPrint + ?Sized> PrettyPrint for Id<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter, ctx: &dyn AdelaideContext) -> std::fmt::Result {
+        write!(f, "Id<{}>({}) => ", std::any::type_name::<T>(), self.0)?;
         T::lookup(*self, ctx).fmt(f, ctx)
     }
 }

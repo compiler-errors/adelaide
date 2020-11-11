@@ -658,8 +658,8 @@ pub enum PExpressionData {
     Closure(Vec<Id<PPattern>>, Id<PType>, Id<PExpression>),
     Throw(Id<PExpression>),
     Index(Id<PExpression>, Id<PExpression>),
-    NamedAccess(Id<PExpression>, Id<str>),
-    IndexAccess(Id<PExpression>, Id<str>),
+    NamedAccess(Id<PExpression>, Span, Id<str>),
+    IndexAccess(Id<PExpression>, Span, Id<str>),
     Await(Id<PExpression>),
 }
 
@@ -997,17 +997,17 @@ impl PExpression {
         }
     }
 
-    pub fn named_access(span: Span, a: Id<PExpression>, i: Id<str>) -> PExpression {
+    pub fn named_access(span: Span, a: Id<PExpression>, i_span: Span, i: Id<str>) -> PExpression {
         PExpression {
             span,
-            data: PExpressionData::NamedAccess(a, i),
+            data: PExpressionData::NamedAccess(a, i_span, i),
         }
     }
 
-    pub fn index_access(span: Span, a: Id<PExpression>, i: Id<str>) -> PExpression {
+    pub fn index_access(span: Span, a: Id<PExpression>, i_span: Span, i: Id<str>) -> PExpression {
         PExpression {
             span,
-            data: PExpressionData::IndexAccess(a, i),
+            data: PExpressionData::IndexAccess(a, i_span, i),
         }
     }
 }

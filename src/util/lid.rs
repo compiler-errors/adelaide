@@ -37,13 +37,23 @@ impl<T: LateLookup + ?Sized> Clone for LId<T> {
 
 impl<T: LateLookup + ?Sized> Debug for LId<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "LId<{}>({:?})", std::any::type_name::<T>(), self.0.id())
+        write!(
+            f,
+            "Id<{}>({:?})",
+            std::any::type_name::<T::Source>(),
+            self.0.id()
+        )
     }
 }
 
 impl<T: LateLookup + ?Sized> PrettyPrint for LId<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>, _: &dyn AdelaideContext) -> std::fmt::Result {
-        write!(f, "LId<{}>({:?})", std::any::type_name::<T>(), self.0.id())
+        write!(
+            f,
+            "Id<{}>({:?})",
+            std::any::type_name::<T::Source>(),
+            self.0.id()
+        )
     }
 }
 

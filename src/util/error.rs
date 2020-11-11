@@ -28,6 +28,7 @@ pub enum AError {
     ScopeItemNotAModule(LScopeItem, Span),
     IncorrectGenerics(Span, usize, usize),
     MissingIn(&'static str, Id<str>, Span, &'static str, Id<str>, Span),
+    NotANumber(&'static str, Span, Id<str>),
 }
 
 impl AError {
@@ -125,6 +126,13 @@ impl AError {
                     used.into_label()
                         .with_message(format!("The missing {} is referenced here", what)),
                 ]),
+            AError::NotANumber(what, s, i) => Diagnostic::error()
+                .with_message(format!(
+                    "Cannot parse {} `{}` as a number",
+                    what,
+                    i.lookup(ctx)
+                ))
+                .with_labels(vec![s.into_label()]),
         }
     }
 }
