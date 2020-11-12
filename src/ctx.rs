@@ -11,7 +11,8 @@ use crate::{
     lexer::Span,
     lowering::{
         LConstructorShape, LEarlyContext, LEnum, LExpression, LFunction, LGlobal, LImpl, LModule,
-        LObject, LPattern, LScopeItem, LStatement, LTrait, LTraitType, LType, LUseItem, LUseResult,
+        LObject, LPattern, LScopeItem, LStatement, LTrait, LTraitShape, LTraitType, LType,
+        LUseItem, LUseResult,
     },
     parser::{
         PEnum, PExpression, PFunction, PGlobal, PImpl, PModule, PObject, PPattern, PStatement,
@@ -53,6 +54,9 @@ pub trait AdelaideContext: salsa::Database {
 
     #[salsa::invoke(crate::parser::parse_root)]
     fn parse_root(&self) -> AResult<Id<PModule>>;
+
+    #[salsa::invoke(crate::parser::parse_std)]
+    fn parse_std(&self) -> AResult<Id<PModule>>;
 
     #[salsa::invoke(crate::parser::parse_mod)]
     fn parse_mod(&self, file_id: Id<AFile>) -> AResult<Id<PModule>>;
@@ -174,6 +178,9 @@ pub trait AdelaideContext: salsa::Database {
     #[salsa::invoke(crate::lowering::enum_variant_constructor)]
     fn enum_variant_constructor(&self, e: Id<PEnum>, v: Id<str>)
         -> AResult<Arc<LConstructorShape>>;
+
+    #[salsa::invoke(crate::lowering::trait_shape)]
+    fn trait_shape(&self, key: Id<PTrait>) -> AResult<Arc<LTraitShape>>;
 
     // ------ TYPECHECKER ------ //
 

@@ -1,3 +1,5 @@
+trait Any {}
+
 trait Downcast {
   fn try_downcast<T>(self) -> Option<T>.
 }

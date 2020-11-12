@@ -22,7 +22,7 @@ use clap::Clap;
 use codespan_reporting::term::termcolor::{ColorChoice, StandardStream};
 use ctx::{AdelaideContext, AdelaideDatabase};
 use file::initialize_from_path_arguments;
-use util::{AResult, Pretty};
+use util::{AResult, IntoDiagnostic, Pretty};
 
 #[derive(Clap)]
 #[clap()]

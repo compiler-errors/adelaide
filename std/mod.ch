@@ -16,9 +16,22 @@ extern fn type_string<T>() -> String.
 extern fn exit(i: Int).
 extern fn breakpoint().
 
-
 fn println(s: String) = {
   print(s + "\n").
+}.
+
+fn todo<T>() -> T = {
+  panic("TODO")
+}.
+
+fn commalipses<T>() -> T = {
+  panic("TODO: implement commalipses")
+}.
+
+fn assert_impl(b: Bool) = {
+  if !b {
+    panic:<()>("Assert failed").
+  }
 }.
 
 fn panic<T>(s: String) -> T = {

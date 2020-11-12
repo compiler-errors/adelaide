@@ -7,7 +7,7 @@ use crate::{
     ctx::AdelaideContext,
     file::AFile,
     lexer::Span,
-    parser::{PEnum, PFunction, PGlobal, PItem, PModule, PObject, PTrait},
+    parser::{PEnum, PFunction, PGlobal, PItem, PModPath, PModule, PObject, PTrait},
     util::{AError, AResult, Id, Intern, Opaque, Pretty},
 };
 
@@ -90,11 +90,18 @@ impl LUseItem {
 
 #[derive(Clone, Debug, Hash, Eq, PartialEq)]
 pub enum LUseError {
-    MissingItem(Id<PModule>, Id<str>, Span),
-    MissingIn(&'static str, Id<str>, Span, &'static str, Id<str>, Span),
+    MissingItem(PModPath, Id<str>, Span),
     Cycle(Vec<Span>, Id<str>),
     Error(AError),
-    NotAModule(LUseItem, Span),
+    NotAModule(&'static str, Id<str>, Span, Span),
+    MissingSubItem {
+        parent_kind: &'static str,
+        parent_name: Id<str>,
+        parent_span: Span,
+        child_kind: &'static str,
+        child_name: Id<str>,
+        use_span: Span,
+    },
 }
 
 impl From<AError> for LUseError {
@@ -168,16 +175,15 @@ fn insert_base_item(
     let (what, name, span) = i.info(ctx);
 
     if let Some(old) = map.insert(name, i) {
-        let (what_old, _, span_old) = old.info(ctx);
+        let (what2, _, span2) = old.info(ctx);
 
-        Err(AError::Duplicated(
-            "item",
-            span,
+        Err(AError::DuplicatedItem {
             what,
-            span_old,
-            what_old,
-            name.lookup(ctx).to_string(),
-        ))
+            span,
+            what2,
+            span2,
+            name,
+        })
     } else {
         Ok(())
     }
@@ -292,7 +298,7 @@ fn lookup_item_early_deep(
                                     vec![(span, name)].into(),
                                     seen,
                                 )
-                                .map_err(|_| LUseError::MissingItem(m, name, span))?;
+                                .map_err(|_| LUseError::MissingItem(PModPath(m), name, span))?;
                             }
 
                             seen.insert((m, name), Ok(current_item.clone()));
@@ -307,14 +313,20 @@ fn lookup_item_early_deep(
                 if info.variants.iter().any(|(_, n, _)| n == &name) {
                     current_item = LUseItem::EnumVariant(e, name);
                 } else {
-                    return Err(LUseError::MissingIn(
-                        "enum", info.name, info.span, "variant", name, span,
-                    ));
+                    return Err(LUseError::MissingSubItem {
+                        parent_kind: "enum",
+                        parent_name: info.name,
+                        parent_span: info.span,
+                        child_kind: "variant",
+                        child_name: name,
+                        use_span: span,
+                    });
                 }
             },
             _ => {
-                let (span, _) = path.pop_front().unwrap();
-                return Err(LUseError::NotAModule(current_item, span));
+                let (use_span, _) = path.pop_front().unwrap();
+                let (kind, name, def_span) = current_item.info(ctx);
+                return Err(LUseError::NotAModule(kind, name, def_span, use_span));
             },
         }
     }
@@ -385,13 +397,31 @@ pub fn mod_items(
     module: Id<PModule>,
 ) -> AResult<Arc<HashMap<Id<str>, LScopeItem>>> {
     let mut items = hashmap! {};
+    let mut blame_spans = hashmap! {};
+    let mut visited = hashset! {};
 
     mod_items_deep(
         &mut items,
-        &mut hashmap! {},
-        &mut hashset! {},
+        &mut blame_spans,
+        &mut visited,
         ctx,
         LUseItem::Module(module),
+    )?;
+
+    mod_items_deep(
+        &mut items,
+        &mut blame_spans,
+        &mut visited,
+        ctx,
+        LUseItem::Module(ctx.parse_root()?),
+    )?;
+
+    mod_items_deep(
+        &mut items,
+        &mut blame_spans,
+        &mut visited,
+        ctx,
+        LUseItem::Module(ctx.parse_std()?),
     )?;
 
     Ok(Arc::new(items))
@@ -461,22 +491,20 @@ fn insert_late_item(
     span: Span,
     item: LScopeItem,
 ) -> AResult<()> {
-    if let Some(span_old) = blame_spans.insert(name, span) {
+    if let Some(_) = blame_spans.insert(name, span) {
         let (what, _, _) = item.info(ctx);
-        let (what_old, _, _) = items.get(&name).unwrap().info(ctx);
+        let (what2, _, span2) = items.get(&name).unwrap().info(ctx);
 
-        return Err(AError::Duplicated(
-            "item",
-            span,
+        return Err(AError::DuplicatedItem {
             what,
-            span_old,
-            what_old,
-            name.lookup(ctx).to_string(),
-        ));
+            span,
+            what2,
+            span2,
+            name,
+        });
     }
 
     items.insert(name, item);
-    blame_spans.insert(name, span);
 
     Ok(())
 }
@@ -492,5 +520,5 @@ pub fn lookup_item(
     items
         .get(&name)
         .copied()
-        .ok_or_else(|| LUseError::MissingItem(module, name, span).into())
+        .ok_or_else(|| LUseError::MissingItem(PModPath(module), name, span).into())
 }

@@ -1,7 +1,5 @@
 use crate::{ctx::AdelaideContext, util::PrettyPrint};
-use std::{
-    fmt::Debug, hash::Hash, lazy::SyncOnceCell, marker::PhantomData, num::NonZeroU32, sync::Arc,
-};
+use std::{fmt::Debug, hash::Hash, marker::PhantomData, num::NonZeroU32, sync::Arc};
 
 #[must_use]
 pub struct Id<T: ?Sized>(NonZeroU32, PhantomData<T>);
@@ -73,7 +71,6 @@ impl<T: ?Sized> Debug for Id<T> {
 
 impl<T: Lookup + PrettyPrint + ?Sized> PrettyPrint for Id<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter, ctx: &dyn AdelaideContext) -> std::fmt::Result {
-        write!(f, "Id<{}>({}) => ", std::any::type_name::<T>(), self.0)?;
         T::lookup(*self, ctx).fmt(f, ctx)
     }
 }

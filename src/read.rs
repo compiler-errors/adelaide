@@ -46,8 +46,11 @@ pub fn read_file<'ctx>(
 }
 
 fn map_io_error(ctx: &dyn AdelaideContext, file_id: Id<AFile>, e: std::io::Error) -> AError {
-    let name = file_id.lookup(ctx).mod_path.join("::");
-    AError::IOErrorInFile(name, format!("{}", e))
+    let path = file_id.lookup(ctx).path.clone().unwrap();
+    AError::IOError {
+        path,
+        io_error: format!("{}", e),
+    }
 }
 
 fn map_utf8_error(
@@ -55,6 +58,9 @@ fn map_utf8_error(
     file_id: Id<AFile>,
     e: std::string::FromUtf8Error,
 ) -> AError {
-    let name = file_id.lookup(ctx).mod_path.join("::");
-    AError::Utf8Error(name, format!("{}", e))
+    let path = file_id.lookup(ctx).path.clone().unwrap();
+    AError::Utf8Error {
+        path,
+        io_error: format!("{}", e),
+    }
 }

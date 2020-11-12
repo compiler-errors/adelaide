@@ -4,7 +4,7 @@ mod lid;
 mod opaque;
 mod pretty;
 
-pub use error::{AError, AResult};
+pub use error::{AError, AResult, IntoDiagnostic};
 pub use id::{Id, Intern, Lookup};
 pub use lid::{LId, LateLookup};
 pub use opaque::Opaque;

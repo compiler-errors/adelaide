@@ -15,6 +15,10 @@ impl<T: LateLookup + Lookup + ?Sized> LId<T> {
     pub fn get(&self, ctx: &dyn AdelaideContext) -> Id<T> {
         *self.1.get_or_init(|| T::late_lookup(self.0, ctx))
     }
+
+    pub fn source(&self) -> Id<T::Source> {
+        self.0
+    }
 }
 
 pub trait LateLookup {

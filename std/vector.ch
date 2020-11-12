@@ -122,8 +122,6 @@ impl<T> Deref<Int> for Vector<T> {
 }
 
 impl<T> DerefAssign<Int> for Vector<T> {
-  type Value = T.
-
   fn deref_assign(self, idx: Int, value: T) -> T = {
     if idx < 0 | idx >= self:len() {
       panic:<()>("Index \(idx) out of bounds. Size is \(self:len())::").
@@ -155,7 +153,7 @@ impl<T> Into<String> for Vector<T> where T: Into<String> {
 
 impl<I> FromIterator<I> for Vector<I> {
   fn from_iterator<It>(it: It) -> Vector<I> where It: Iterator<Item=I> = {
-    let v = Vector:new_with_size_hint(it:size_hint()).
+    let v = Vector::new_with_size_hint(it:size_hint()).
 
     for i in it {
       v:push(i).

@@ -92,10 +92,10 @@ impl<K: PrettyPrint, V: PrettyPrint> PrettyPrint for HashMap<K, V> {
 }
 
 macro_rules! simple_pretty {
-    ($($ty:ty),*) => {$(
+    ($tr:path; $($ty:ty),*) => {$(
         impl PrettyPrint for $ty {
             fn fmt(&self, f: &mut Formatter, _: &dyn AdelaideContext) -> Result {
-                <Self as Debug>::fmt(self, f)
+                <Self as $tr>::fmt(self, f)
             }
         }
     )*};
@@ -104,8 +104,8 @@ macro_rules! simple_pretty {
     }
 }
 
-simple_pretty!(bool, u64, usize, char, str, String);
-simple_pretty!(std::path::PathBuf);
+simple_pretty!(std::fmt::Display; bool, u64, usize, char, str, &'static str, String);
+simple_pretty!(std::fmt::Debug; std::path::PathBuf);
 
 macro_rules! tuple_pretty {
     ($($ty:ident),*; $($idx:tt),*) => {

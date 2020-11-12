@@ -297,13 +297,13 @@ MaybeTraitTypeRestriction: Vec<Id<PTraitType>> = {
     () => vec![],
 };
 
-DeclObjectParams: (bool, Vec<(Span, Id<str>, Id<PType>)>) = {
+DeclObjectParams: (Option<Span>, Vec<(Span, Id<str>, Id<PType>)>) = {
     "(" <CommaTrailingOrEmpty<DeclParam>> ")" =>
-        (false, <>),
-    "(" "self" ")" =>
-        (true, vec![]),
-    "(" "self" "," <CommaTrailingOrEmpty<DeclParam>> ")" =>
-        (true, <>),
+        (None, <>),
+    "(" <l:@L> "self" <h:@R> ")" =>
+        (Some(Span(file, l, h)), vec![]),
+    "(" <l:@L> "self" <h:@R> "," <i:CommaTrailingOrEmpty<DeclParam>> ")" =>
+        (Some(Span(file, l, h)), i),
 };
 
 // -- Impl -- //
@@ -416,7 +416,7 @@ TypeOrBinding: Either<Id<PType>, (Span, Id<str>, Id<PType>)> = {
 
 MaybeReturn: Id<PType> = {
     "->" <Type>,
-    <l:@L> () <h:@R> => PType::infer(Span(file, l, h)).intern(ctx),
+    <l:@L> () <h:@R> => PType::tuple(Span(file, l, h), vec![]).intern(ctx),
 };
 
 // --- Statement --- //

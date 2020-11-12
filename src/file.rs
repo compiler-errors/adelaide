@@ -142,12 +142,18 @@ fn expect_mod_name(name: Option<&OsStr>) -> AResult<String> {
     todo!("Error handling")
 }
 
-fn map_path_error(child_name: String, e: std::io::Error) -> AError {
-    AError::IOErrorInArgumentPath(child_name, format!("{}", e))
+fn map_path_error(child_path: String, e: std::io::Error) -> AError {
+    AError::IOErrorInArgumentPath {
+        child_path,
+        io_error: format!("{}", e),
+    }
 }
 
 fn map_io_error(my_path: &Path, e: std::io::Error) -> AError {
-    AError::IOErrorInPathChild(my_path.to_path_buf(), format!("{}", e))
+    AError::IOErrorInPathChild {
+        path: my_path.to_path_buf(),
+        io_error: format!("{}", e),
+    }
 }
 
 pub fn mod_parent(ctx: &dyn AdelaideContext, key: Id<AFile>) -> Id<AFile> {

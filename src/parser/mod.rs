@@ -20,6 +20,10 @@ pub fn parse_root(ctx: &dyn AdelaideContext) -> AResult<Id<PModule>> {
     ctx.parse_mod(ctx.mod_tree_root())
 }
 
+pub fn parse_std(ctx: &dyn AdelaideContext) -> AResult<Id<PModule>> {
+    ctx.parse_mod(ctx.mod_tree_root().lookup(ctx).children["std"])
+}
+
 pub fn parse_mod(ctx: &dyn AdelaideContext, file_id: Id<AFile>) -> AResult<Id<PModule>> {
     let raw_mod = ctx.read_file(file_id)?;
 
@@ -68,14 +72,16 @@ fn map_parse_error(file_id: Id<AFile>, error: ParseError<usize, Token, AError>) 
         ParseError::UnrecognizedToken {
             token: (l, t, h),
             expected,
-        } => AError::SpanError(
-            Span(file_id, l, h),
-            format!("Unexpected token {}, expected {}", t, CommaSep(expected)),
-        ),
-        ParseError::UnrecognizedEOF { location, expected } => AError::SpanError(
-            Span(file_id, location.saturating_sub(1), location),
-            format!("Unexpected EOF, expected {}", CommaSep(expected)),
-        ),
+        } => AError::UnexpectedToken {
+            given: format!("{}", t),
+            expected: format!("{}", CommaSep(expected)),
+            span: Span(file_id, l, h),
+        },
+        ParseError::UnrecognizedEOF { location, expected } => AError::UnexpectedToken {
+            given: "EOF".to_string(),
+            expected: format!("{}", CommaSep(expected)),
+            span: Span(file_id, location, location),
+        },
         _ => todo!(),
     }
 }

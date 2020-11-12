@@ -166,7 +166,7 @@ impl Range<Int> for Int {
   fn range(self, t: Bound<Int>) -> RangeIterator = match t {
     Bound::Inclusive(t) => RangeIterator::Inclusive(self, t),
     Bound::Exclusive(t) => RangeIterator::Exclusive(self, t),
-    Bound::Unbounded => RangeIterator::Unbounded(self),
+    Bound::Unbounded => RangeIterator::Infinite(self),
   }.
 }
 

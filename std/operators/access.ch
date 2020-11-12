@@ -31,12 +31,19 @@ impl<T> Deref<RangeIterator> for [T] {
     let len = self:len().
 
     let (start, end) = match idx {
-      RangeIterator::Finite(a, b) => {
+      RangeIterator::Inclusive(a, b) => {
         if a > b {
           panic:<()>("Start index of array slice is greater than end. Start = \(a), End = \(b).").
         }
 
         (a, b)
+      },
+      RangeIterator::Exclusive(a, b) => {
+        if a > b {
+          panic:<()>("Start index of array slice is greater than end. Start = \(a), End = \(b).").
+        }
+
+        (a, b - 1)
       },
       RangeIterator::Infinite(a) => (a, self:len()),
     }.
@@ -46,11 +53,11 @@ impl<T> Deref<RangeIterator> for [T] {
     }
 
     if start > len {
-      panic:<()>("Start index of array slice is out of bounds. Start = \(start), length = \(len).").
+      start = len.
     }
 
     if end > len {
-      panic:<()>("End index of array slice is out of bounds. End = \(start), length = \(len).").
+      end = len.
     }
 
     internal_array_slice(self, start, end)

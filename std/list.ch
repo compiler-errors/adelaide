@@ -19,10 +19,10 @@ impl<T> Self for List<T> {
 
     match self:root {
       None => {
-        self:root = self:end = Some(Link:new(item)).
+        self:root = self:end = Some(Link::new(item)).
       },
       Some(old_root) => {
-        let new_root = Link:new(item).
+        let new_root = Link::new(item).
         new_root:link_before(old_root).
         self:root = Some(new_root).
       }
@@ -34,10 +34,10 @@ impl<T> Self for List<T> {
 
     match self:end {
       None => {
-        self:root = self:end = Some(Link:new(item)).
+        self:root = self:end = Some(Link::new(item)).
       },
       Some(old_end) => {
-        let new_end = Link:new(item).
+        let new_end = Link::new(item).
         new_end:link_after(old_end).
         self:end = Some(new_end).
       }
@@ -95,7 +95,7 @@ impl<T> Self for List<T> {
     } else {
       match Self::get_node_internal(self:root, idx - 1) {
         Some(node) => {
-          let new_link = Link:new(item).
+          let new_link = Link::new(item).
           node:link_after(new_link).
         },
         None => {
@@ -210,8 +210,6 @@ impl<T> Deref<Int> for List<T> {
 }
 
 impl<T> DerefAssign<Int> for List<T> {
-  type Value = T.
-
   fn deref_assign(self, idx: Int, value: T) -> T = {
     if idx >= self:len() {
       panic:<()>("Index \(idx) out of bounds. Size is \(self:len())::").

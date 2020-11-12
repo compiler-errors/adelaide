@@ -13,7 +13,7 @@ impl<K, V> Self for HashMap<K, V> {
     allocate HashMap {
       size: 0,
 
-      buckets: allocate [Bucket; defaulqt_bucket_size],
+      buckets: allocate [Bucket; default_bucket_size],
       num_buckets: default_bucket_size
     }
   }.
@@ -143,7 +143,7 @@ impl<K, V> Iterable for HashMap<K, V> {
   fn iterator(self) -> HashMapIterator<K, V> = {
     let (next_bucket, buckets) = self:buckets:iterator():next().
 
-    HashMapIterator::Iterator {
+    HashMapIterator {
       size_hint: self:size,
       buckets,
       links: next_bucket:unwrap():entries:iterator()
@@ -161,15 +161,15 @@ impl<K, V> Iterator for HashMapIterator<K, V> {
   type Item = (K, V).
 
   fn next(self) -> (Option<(K, V)>, HashMapIterator<K, V>) = {
-    let HashMapIterator::Iterator { size_hint, buckets, links } = self.
+    let HashMapIterator { size_hint, buckets, links } = self.
 
     if links:has_next() {
       let (next_link, links) = links:next().
       let (_, k, v) = next_link:unwrap().
-      return (Some((k, v)), HashMapIterator::Iterator { size_hint: size_hint - 1, buckets, links }).
+      return (Some((k, v)), HashMapIterator { size_hint: size_hint - 1, buckets, links }).
     }
 
-    let ArrayIterator::Iterator { idx: buckets_idx, ... } = buckets.
+    let ArrayIterator { idx: buckets_idx, ... } = buckets.
 
     while buckets:has_next() {
       let (next_bucket, next_buckets) = buckets:next().
@@ -181,21 +181,21 @@ impl<K, V> Iterator for HashMapIterator<K, V> {
         let (next_link, links) = next_bucket:entries:iterator():next().
         let (_, k, v) = next_link:unwrap().
 
-        return (Some((k, v)), HashMapIterator::Iterator { size_hint: size_hint - 1, buckets, links }).
+        return (Some((k, v)), HashMapIterator { size_hint: size_hint - 1, buckets, links }).
       }
     }
 
     assert size_hint == 0.
-    (None, HashMapIterator::Iterator { size_hint, buckets, links })
+    (None, HashMapIterator { size_hint, buckets, links })
   }.
 
   fn has_next(self) -> Bool = {
-    let HashMapIterator::Iterator { size_hint, ... } = self.
+    let HashMapIterator { size_hint, ... } = self.
     size_hint > 0
   }.
 
   fn size_hint(self) -> Int = {
-    let HashMapIterator::Iterator { size_hint, ... } = self.
+    let HashMapIterator { size_hint, ... } = self.
     size_hint
   }.
 }
@@ -225,7 +225,7 @@ object Bucket<K, V> {
 
 impl<K, V> Default for Bucket<K, V> {
   fn default() -> Bucket<K, V> =
-    allocate Bucket { entries: List:new() }.
+    allocate Bucket { entries: List::new() }.
 }
 
 impl<K, V> Into<String> for Bucket<K, V> where K: Into<String>, V: Into<String> {

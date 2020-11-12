@@ -13,8 +13,9 @@ use crate::{
     lexer::Span,
     parser::{
         PBinopKind, PConstructorArguments, PEnum, PExpression, PExpressionData, PFunction, PGlobal,
-        PImpl, PLiteral, PModule, PObject, PPattern, PPatternConstructorArguments, PPatternData,
-        PStatement, PStatementData, PTrait, PTraitMember, PTraitType, PType, PTypeData,
+        PImpl, PImplMember, PItem, PLiteral, PModule, PObject, PObjectMembers, PPattern,
+        PPatternConstructorArguments, PPatternData, PStatement, PStatementData, PTrait,
+        PTraitMember, PTraitType, PType, PTypeData,
     },
     util::{AError, AResult, Id, Intern, LId, LateLookup},
 };
@@ -51,9 +52,9 @@ pub fn lower_mod(ctx: &dyn AdelaideContext, key: Id<PModule>) -> AResult<Id<LMod
     let mut globals = btreemap! {};
     let mut functions = btreemap! {};
     let mut objects = btreemap! {};
-    let enums = btreemap! {};
-    let traits = btreemap! {};
-    let impls = btreemap! {};
+    let mut enums = btreemap! {};
+    let mut traits = btreemap! {};
+    let mut impls = btreemap! {};
 
     for (&n, &i) in &*ctx.local_mod_items(key)? {
         match i {
@@ -63,12 +64,29 @@ pub fn lower_mod(ctx: &dyn AdelaideContext, key: Id<PModule>) -> AResult<Id<LMod
             LScopeItem::Module(m) => {
                 modules.insert(m, lower_mod(ctx, m)?);
             },
-            LScopeItem::Function(f) => todo!(),
-            LScopeItem::Object(o) => todo!(),
-            LScopeItem::Enum(e) => todo!(),
-            LScopeItem::Trait(_) => todo!(),
-            LScopeItem::EnumVariant(e, v) => todo!(),
-            LScopeItem::Variable(_) => unreachable!(),
+            LScopeItem::Function(f) => {
+                functions.insert(f, lcx.lower_function(f)?);
+            },
+            LScopeItem::Object(o) => {
+                objects.insert(o, lcx.lower_object(o)?);
+            },
+            LScopeItem::Enum(e) => {
+                enums.insert(e, lcx.lower_enum(e)?);
+            },
+            LScopeItem::Trait(t) => {
+                traits.insert(t, lcx.lower_trait(t)?);
+            },
+            LScopeItem::EnumVariant(..) | LScopeItem::Variable(_) | LScopeItem::Generic(_) =>
+                unreachable!(),
+        }
+    }
+
+    for i in &info.items {
+        match i {
+            PItem::Impl(i) => {
+                impls.insert(*i, lcx.lower_impl(*i)?);
+            },
+            _ => {},
         }
     }
 
@@ -137,10 +155,12 @@ impl<'ctx> LoweringContext<'ctx> {
 
     fn enter_context(&mut self, return_allowed: bool, await_allowed: bool) {
         self.scopes
-            .push(FunctionScope::new(return_allowed, await_allowed))
+            .push(FunctionScope::new(return_allowed, await_allowed));
+        self.enter_block();
     }
 
     fn exit_context(&mut self) -> LVariableContext {
+        self.exit_block();
         self.scopes.pop().unwrap().vcx
     }
 
@@ -163,18 +183,30 @@ impl<'ctx> LoweringContext<'ctx> {
 
     fn lookup_std_item(&self, name: &'static str) -> LScopeItem {
         // We expect none of these results to be an error, so just unwrap them.
-        *self
+        if let Some(i) = self
             .ctx
-            .mod_items(self.ctx.parse_root().unwrap())
+            .mod_items(self.ctx.parse_std().unwrap())
             .unwrap()
             .get(&self.ctx.static_name(name))
-            .unwrap()
+        {
+            *i
+        } else {
+            panic!("Expected to find std item: {}", name)
+        }
     }
 
     fn lookup_path(&mut self, path: &[(Span, Id<str>)]) -> AResult<LScopeItem> {
         match self.lookup_path_partial(path)? {
             (_, i, &[]) => Ok(i),
-            (_, i, &[(s, _), ..]) => Err(AError::ScopeItemNotAModule(i, s)),
+            (_, i, &[(s, _), ..]) => {
+                let (kind, name, def_span) = i.info(self.ctx);
+                Err(AError::ItemIsNotAModule {
+                    kind,
+                    name,
+                    def_span,
+                    use_span: s,
+                })
+            },
         }
     }
 
@@ -200,9 +232,14 @@ impl<'ctx> LoweringContext<'ctx> {
                     if info.variants.iter().any(|(_, n, _)| n == name) {
                         return Ok((span, LScopeItem::EnumVariant(e, *name), &path[i + 1..]));
                     } else {
-                        return Err(AError::MissingIn(
-                            "enum", info.name, info.span, "variant", *name, *next_span,
-                        ));
+                        return Err(AError::MissingSubItem {
+                            parent_kind: "enum",
+                            parent_name: info.name,
+                            parent_span: info.span,
+                            child_kind: "variant",
+                            child_name: *name,
+                            use_span: *next_span,
+                        });
                     }
                 },
                 item => {
@@ -215,17 +252,18 @@ impl<'ctx> LoweringContext<'ctx> {
     }
 
     fn lookup_scoped_item(&mut self, at: Span, name: Id<str>) -> AResult<LScopeItem> {
-        if let Some(item) = Self::lookup_function_scoped_item(at, name, &mut self.scopes) {
+        if let Some(item) = Self::lookup_function_scoped_variable(name, &mut self.scopes) {
             Ok(LScopeItem::Variable(item))
+        } else if let Some(item) = self.lookup_function_scoped_generic(name) {
+            Ok(LScopeItem::Generic(item))
         } else if let Some(item) = self.base_items.get(&name) {
             Ok(*item)
         } else {
-            todo!("Die")
+            Err(AError::MissingItem { span: at, name })
         }
     }
 
-    fn lookup_function_scoped_item(
-        at: Span,
+    fn lookup_function_scoped_variable(
         name: Id<str>,
         scopes: &mut [FunctionScope],
     ) -> Option<LVariable> {
@@ -237,11 +275,21 @@ impl<'ctx> LoweringContext<'ctx> {
 
         if let Some(item) = scope.get(name) {
             Some(item)
-        } else if let Some(captured_item) = Self::lookup_function_scoped_item(at, name, scopes) {
+        } else if let Some(captured_item) = Self::lookup_function_scoped_variable(name, scopes) {
             Some(scope.capture(captured_item))
         } else {
             None
         }
+    }
+
+    fn lookup_function_scoped_generic(&self, name: Id<str>) -> Option<LGeneric> {
+        for s in self.scopes.iter().rev() {
+            if let Some(g) = s.generics.get(&name) {
+                return Some(*g);
+            }
+        }
+
+        None
     }
 
     fn lower_ty(&mut self, t: Id<PType>, infer_allowed: bool) -> AResult<Id<LType>> {
@@ -252,7 +300,7 @@ impl<'ctx> LoweringContext<'ctx> {
                 if infer_allowed {
                     fresh_infer_ty()
                 } else {
-                    todo!("Die!")
+                    return Err(AError::IllegalInfer { span: *span });
                 },
             PTypeData::Awaitable(a) => {
                 if let LScopeItem::Object(awaitable) = self.lookup_std_item("Awaitable") {
@@ -266,25 +314,44 @@ impl<'ctx> LoweringContext<'ctx> {
 
                 match self.lookup_path(&*p)? {
                     LScopeItem::Enum(e) => {
+                        let info = e.lookup(self.ctx);
                         let generics = self.check_generics_parity(
-                            *span,
                             generics,
-                            e.lookup(self.ctx).generics.len(),
+                            *span,
+                            info.generics.len(),
+                            info.span,
                             infer_allowed,
                         )?;
+
                         LType::Enum(e.into(), generics)
                     },
                     LScopeItem::Object(o) => {
+                        let info = o.lookup(self.ctx);
                         let generics = self.check_generics_parity(
-                            *span,
                             generics,
-                            o.lookup(self.ctx).generics.len(),
+                            *span,
+                            info.generics.len(),
+                            info.span,
                             infer_allowed,
                         )?;
+
                         LType::Object(o.into(), generics)
                     },
-                    otherwise => {
-                        todo!("Die, not an object or enum or struct");
+                    LScopeItem::Generic(g) => {
+                        if !generics.is_empty() {
+                            return Err(AError::DenyGenerics {
+                                kind: "generic type",
+                                name: g.name,
+                                use_span: *span,
+                                def_span: g.span,
+                            });
+                        }
+
+                        LType::Generic(g)
+                    },
+                    i => {
+                        let (kind, name, def_span) = i.info(self.ctx);
+                        return Err(AError::ItemIsNotAType { kind, name, def_span, use_span: *span });
                     },
                 }
             },
@@ -300,7 +367,9 @@ impl<'ctx> LoweringContext<'ctx> {
                 self.lower_tys(es, infer_allowed)?,
                 self.lower_ty(*r, infer_allowed)?,
             ),
-            PTypeData::Elaborated(..) => todo!("Die"),
+            PTypeData::Elaborated(..) => {
+                return Err(AError::IllegalElaboration {span: *span});
+            }
             PTypeData::Int => LType::Int,
             PTypeData::Float => LType::Float,
             PTypeData::Char => LType::Char,
@@ -357,14 +426,20 @@ impl<'ctx> LoweringContext<'ctx> {
             } => {
                 let tr = match self.lookup_path(path)? {
                     LScopeItem::Trait(t) => t,
-                    otherwise => todo!("Die"),
+                    i => {
+                        let (kind, name, def_span) = i.info(self.ctx);
+                        return Err(AError::ItemIsNotATrait { kind, name, def_span, use_span: *span });
+                    }
                 };
+
+                let info = tr.lookup(self.ctx);
 
                 let generics = self.lower_tys(generics, infer_allowed)?;
                 let generics = self.check_generics_parity(
-                    *span,
                     generics,
-                    tr.lookup(self.ctx).generics.len(),
+                    *span,
+                    info.generics.len(),
+                    info.span,
                     infer_allowed,
                 )?;
 
@@ -375,25 +450,22 @@ impl<'ctx> LoweringContext<'ctx> {
                 for (span, name, ty) in bounds {
                     if !trait_bounds.contains_key(name) {
                         let tr = tr.lookup(self.ctx);
-                        return Err(AError::MissingIn(
-                            "trait",
-                            tr.name,
-                            tr.span,
-                            "associated type",
-                            *name,
-                            *span,
-                        ));
+                        return Err(AError::MissingSubItem {
+                            parent_kind: "trait",
+                            parent_name: tr.name,
+                            parent_span: tr.span,
+                            child_kind: "associated type",
+                            child_name: *name,
+                            use_span: *span,
+                        });
                     }
 
                     if let Some(old_span) = lowered_at.get(name) {
-                        return Err(AError::Duplicated(
-                            "trait bound",
-                            *old_span,
-                            "trait bound",
-                            *span,
-                            "trait bound",
-                            name.lookup(self.ctx).to_string(),
-                        ));
+                        return Err(AError::DuplicatedTraitBound {
+                            name: *name,
+                            span: *old_span,
+                            span2: *span,
+                        });
                     }
 
                     lowered_at.insert(*name, *span);
@@ -470,32 +542,544 @@ impl<'ctx> LoweringContext<'ctx> {
         .intern(self.ctx))
     }
 
+    fn lower_function(&mut self, f: Id<PFunction>) -> AResult<Id<LFunction>> {
+        let PFunction {
+            parent,
+            span,
+            name,
+            generics,
+            parameters,
+            return_ty,
+            restrictions,
+            body,
+        } = &*f.lookup(self.ctx);
+
+        self.enter_context(true, false);
+
+        let mut gs = vec![];
+        for (s, g) in generics {
+            gs.push(self.declare_generic(*g, *s)?);
+        }
+
+        let mut ps = vec![];
+        for (s, n, t) in parameters {
+            let t = self.lower_ty(*t, false)?;
+            ps.push(self.declare_variable(*n, *s, t));
+        }
+
+        let return_ty = self.lower_ty(*return_ty, false)?;
+
+        let mut rs = vec![];
+        for (t, trs) in restrictions {
+            let t = self.lower_ty(*t, false)?;
+
+            for tr in trs {
+                rs.push((t, self.lower_trait_ty(*tr, false)?));
+            }
+        }
+
+        let body = if let Some(body) = body {
+            Some(self.lower_expr(*body)?)
+        } else {
+            None
+        };
+
+        let vcx = self.exit_context();
+
+        Ok(LFunction {
+            source: f,
+            span: *span,
+            name: *name,
+            generics: gs,
+            parameters: ps,
+            return_ty,
+            restrictions: rs,
+            body,
+            vcx,
+        }
+        .intern(self.ctx))
+    }
+
+    fn lower_object(&mut self, o: Id<PObject>) -> AResult<Id<LObject>> {
+        let PObject {
+            parent,
+            is_structural,
+            span,
+            name,
+            generics,
+            restrictions,
+            members,
+        } = &*o.lookup(self.ctx);
+
+        self.enter_context(false, false);
+
+        let mut gs = vec![];
+        for (s, g) in generics {
+            gs.push(self.declare_generic(*g, *s)?);
+        }
+
+        let mut rs = vec![];
+        for (t, trs) in restrictions {
+            let t = self.lower_ty(*t, false)?;
+
+            for tr in trs {
+                rs.push((t, self.lower_trait_ty(*tr, false)?));
+            }
+        }
+
+        let members = self.lower_object_members(members)?;
+
+        self.exit_context();
+
+        Ok(LObject {
+            source: o,
+            span: *span,
+            is_structural: *is_structural,
+            name: *name,
+            generics: gs,
+            restrictions: rs,
+            members,
+        }
+        .intern(self.ctx))
+    }
+
+    fn lower_object_members(&mut self, c: &PObjectMembers) -> AResult<LMembers> {
+        match c {
+            PObjectMembers::Empty(s) => Ok(LMembers::Empty(*s)),
+            PObjectMembers::Positional(s, es) =>
+                Ok(LMembers::Positional(*s, self.lower_tys(es, false)?)),
+            PObjectMembers::Named(s, es) => {
+                let mut members = vec![];
+                let mut mapping = btreemap! {};
+
+                for (i, (s, n, t)) in es.iter().enumerate() {
+                    members.push(self.lower_ty(*t, false)?);
+
+                    if let Some((_, old_s)) = mapping.insert(*n, (i, *s)) {
+                        return Err(AError::DuplicatedDefinition {
+                            kind: "object member",
+                            name: *n,
+                            span: *s,
+                            span2: old_s,
+                        });
+                    }
+                }
+
+                Ok(LMembers::Named(*s, members, mapping))
+            },
+        }
+    }
+
+    fn lower_enum(&mut self, e: Id<PEnum>) -> AResult<Id<LEnum>> {
+        let PEnum {
+            parent,
+            span,
+            name,
+            generics,
+            restrictions,
+            variants,
+        } = &*e.lookup(self.ctx);
+
+        self.enter_context(false, false);
+
+        let mut gs = vec![];
+        for (s, g) in generics {
+            gs.push(self.declare_generic(*g, *s)?);
+        }
+
+        let mut rs = vec![];
+        for (t, trs) in restrictions {
+            let t = self.lower_ty(*t, false)?;
+
+            for tr in trs {
+                rs.push((t, self.lower_trait_ty(*tr, false)?));
+            }
+        }
+
+        let mut seen = hashmap! {};
+        let mut vs = btreemap! {};
+
+        for (s, n, v) in variants {
+            if let Some(old_s) = seen.insert(*n, *s) {
+                return Err(AError::DuplicatedDefinition {
+                    kind: "enum variant",
+                    name: *n,
+                    span: *s,
+                    span2: old_s,
+                });
+            }
+
+            vs.insert(*n, self.lower_object_members(v)?);
+        }
+
+        self.exit_context();
+
+        Ok(LEnum {
+            source: e,
+            span: *span,
+            name: *name,
+            generics: gs,
+            restrictions: rs,
+            variants: vs,
+        }
+        .intern(self.ctx))
+    }
+
+    fn lower_trait(&mut self, t: Id<PTrait>) -> AResult<Id<LTrait>> {
+        let PTrait {
+            parent,
+            span,
+            name,
+            generics,
+            restrictions,
+            members,
+        } = &*t.lookup(self.ctx);
+
+        self.enter_context(false, false);
+
+        let mut gs = vec![];
+        for (s, g) in generics {
+            gs.push(self.declare_generic(*g, *s)?);
+        }
+
+        let mut rs = vec![];
+        for (t, trs) in restrictions {
+            let t = self.lower_ty(*t, false)?;
+
+            for tr in trs {
+                rs.push((t, self.lower_trait_ty(*tr, false)?));
+            }
+        }
+
+        let mut seen = hashmap! {};
+        let mut types = btreemap! {};
+        let mut methods = btreemap! {};
+
+        for m in members {
+            match m {
+                PTraitMember::Type(s, n, ts) => {
+                    if let Some(old_s) = seen.insert(*n, *s) {
+                        return Err(AError::DuplicatedDefinition {
+                            kind: "associated type",
+                            name: *n,
+                            span: *s,
+                            span2: old_s,
+                        });
+                    }
+
+                    types.insert(*n, self.lower_trait_tys(ts, false)?);
+                },
+                PTraitMember::Function {
+                    span,
+                    name,
+                    generics,
+                    has_self,
+                    parameters,
+                    return_ty,
+                    restrictions,
+                } => {
+                    if let Some(old_s) = seen.insert(*name, *span) {
+                        return Err(AError::DuplicatedDefinition {
+                            kind: "method",
+                            name: *name,
+                            span: *span,
+                            span2: old_s,
+                        });
+                    }
+
+                    self.enter_context(false, false);
+
+                    let mut gs = vec![];
+                    for (s, g) in generics {
+                        gs.push(self.declare_generic(*g, *s)?);
+                    }
+
+                    let mut ps = vec![];
+
+                    if let Some(span) = has_self {
+                        ps.push(self.declare_variable(
+                            self.ctx.static_name("self"),
+                            *span,
+                            LType::SelfType.intern(self.ctx),
+                        ));
+                    }
+
+                    for (s, n, t) in parameters {
+                        let t = self.lower_ty(*t, false)?;
+                        ps.push(self.declare_variable(*n, *s, t));
+                    }
+
+                    let return_ty = self.lower_ty(*return_ty, false)?;
+
+                    let mut rs = vec![];
+                    for (t, trs) in restrictions {
+                        let t = self.lower_ty(*t, false)?;
+
+                        for tr in trs {
+                            rs.push((t, self.lower_trait_ty(*tr, false)?));
+                        }
+                    }
+
+                    self.exit_context();
+
+                    methods.insert(*name, LTraitMethod {
+                        parent: t.into(),
+                        span: *span,
+                        name: *name,
+                        generics: gs,
+                        parameters: ps,
+                        restrictions: rs,
+                        return_ty,
+                    });
+                },
+            }
+        }
+
+        self.exit_context();
+
+        Ok(LTrait {
+            source: t,
+            span: *span,
+            name: *name,
+            generics: gs,
+            restrictions: rs,
+            types,
+            methods,
+        }
+        .intern(self.ctx))
+    }
+
+    fn lower_impl(&mut self, i: Id<PImpl>) -> AResult<Id<LImpl>> {
+        let PImpl {
+            parent,
+            span,
+            generics,
+            ty,
+            trait_ty,
+            restrictions,
+            members,
+        } = &*i.lookup(self.ctx);
+
+        self.enter_context(false, false);
+
+        let mut gs = vec![];
+        for (s, g) in generics {
+            gs.push(self.declare_generic(*g, *s)?);
+        }
+
+        let ty = self.lower_ty(*ty, false)?;
+        let trait_ty = if let Some(trait_ty) = trait_ty {
+            Some(self.lower_trait_ty(*trait_ty, false)?)
+        } else {
+            None
+        };
+
+        let mut rs = vec![];
+        for (t, trs) in restrictions {
+            let t = self.lower_ty(*t, false)?;
+
+            for tr in trs {
+                rs.push((t, self.lower_trait_ty(*tr, false)?));
+            }
+        }
+
+        let mut seen = hashmap! {};
+        let mut types = btreemap! {};
+        let mut methods = btreemap! {};
+
+        for m in members {
+            match m {
+                PImplMember::Type(s, n, t) => {
+                    if let Some(old_s) = seen.insert(*n, *s) {
+                        return Err(AError::DuplicatedDefinition {
+                            kind: "associated type",
+                            name: *n,
+                            span: *s,
+                            span2: old_s,
+                        });
+                    }
+
+                    types.insert(*n, self.lower_ty(*t, false)?);
+                },
+                PImplMember::Function {
+                    span,
+                    name,
+                    generics,
+                    has_self,
+                    parameters,
+                    return_ty,
+                    restrictions,
+                    body,
+                } => {
+                    if let Some(old_s) = seen.insert(*name, *span) {
+                        return Err(AError::DuplicatedDefinition {
+                            kind: "method",
+                            name: *name,
+                            span: *span,
+                            span2: old_s,
+                        });
+                    }
+
+                    self.enter_context(true, false);
+
+                    let mut gs = vec![];
+                    for (s, g) in generics {
+                        gs.push(self.declare_generic(*g, *s)?);
+                    }
+
+                    let mut ps = vec![];
+
+                    if let Some(span) = has_self {
+                        ps.push(self.declare_variable(
+                            self.ctx.static_name("self"),
+                            *span,
+                            LType::SelfType.intern(self.ctx),
+                        ));
+                    }
+
+                    for (s, n, t) in parameters {
+                        let t = self.lower_ty(*t, false)?;
+                        ps.push(self.declare_variable(*n, *s, t));
+                    }
+
+                    let return_ty = self.lower_ty(*return_ty, false)?;
+
+                    let mut rs = vec![];
+                    for (t, trs) in restrictions {
+                        let t = self.lower_ty(*t, false)?;
+
+                        for tr in trs {
+                            rs.push((t, self.lower_trait_ty(*tr, false)?));
+                        }
+                    }
+
+                    let body = self.lower_expr(*body)?;
+
+                    let vcx = self.exit_context();
+
+                    methods.insert(*name, LImplMethod {
+                        parent: i.into(),
+                        span: *span,
+                        name: *name,
+                        generics: gs,
+                        parameters: ps,
+                        restrictions: rs,
+                        return_ty,
+                        body,
+                        vcx,
+                    });
+                },
+            }
+        }
+
+        self.exit_context();
+
+        if let Some(trait_ty) = trait_ty {
+            fn compare<T>(
+                parent_name: Id<str>,
+                item_kind: &'static str,
+                expected: &HashMap<Id<str>, Span>,
+                given: &BTreeMap<Id<str>, T>,
+                seen: &HashMap<Id<str>, Span>,
+            ) -> AResult<()> {
+                for (n, s) in expected {
+                    if !given.contains_key(n) {
+                        return Err(AError::ExpectedSubItem {
+                            parent_kind: "impl for trait",
+                            parent_name,
+                            item_kind,
+                            item_name: *n,
+                            span: *s,
+                        });
+                    }
+                }
+
+                for (n, _) in given {
+                    if !expected.contains_key(n) {
+                        let s = seen[n];
+                        return Err(AError::UnexpectedSubItem {
+                            parent_kind: "impl for trait",
+                            parent_name,
+                            item_kind,
+                            item_name: *n,
+                            span: s,
+                        });
+                    }
+                }
+
+                Ok(())
+            }
+
+            let parent = trait_ty.lookup(self.ctx).tr.source();
+            let parent_name = parent.lookup(self.ctx).name;
+            let LTraitShape {
+                types: expected_types,
+                methods: expected_methods,
+            } = &*self.ctx.trait_shape(parent)?;
+
+            compare(parent_name, "type", expected_types, &types, &seen)?;
+            compare(parent_name, "method", expected_methods, &methods, &seen)?;
+        }
+
+        Ok(LImpl {
+            source: i,
+            span: *span,
+            trait_ty,
+            ty,
+            generics: gs,
+            restrictions: rs,
+            types,
+            methods,
+        }
+        .intern(self.ctx))
+    }
+
     fn lower_expr(&mut self, e: Id<PExpression>) -> AResult<Id<LExpression>> {
         let PExpression { span, data } = &*e.lookup(self.ctx);
 
         let data = match data {
-            PExpressionData::Unimplemented => LExpressionData::Unimplemented,
+            PExpressionData::Unimplemented =>
+                if let LScopeItem::Function(unimplemented) = self.lookup_std_item("unimplemented") {
+                    LExpressionData::Call(unimplemented.into(), vec![self.fresh_infer_ty()], vec![])
+                } else {
+                    unreachable!()
+                },
             PExpressionData::Identifiers(id, generics) => match self.lookup_path_partial(&id)? {
                 (span, LScopeItem::Function(f), &[]) => {
+                    let info = f.lookup(self.ctx);
+
                     let generics = self.lower_tys(generics, true)?;
                     let generics = self.check_generics_parity(
-                        span,
                         generics,
-                        f.lookup(self.ctx).generics.len(),
+                        span,
+                        info.generics.len(),
+                        info.span,
                         true,
                     )?;
 
                     LExpressionData::GlobalFunction(f.into(), generics)
                 },
                 (span, LScopeItem::Function(f), &[(access_span, mem), ..]) => {
-                    todo!("Die: Cannot access function $f at $mem... defined here X");
+                    let info = f.lookup(self.ctx);
+                    return Err(AError::CannotAccessMembers {
+                        kind: "function",
+                        name: info.name,
+                        mem,
+                        use_span: span,
+                        def_span: info.span,
+                    });
                 },
                 (span, LScopeItem::Variable(v), rest) => {
                     let data =
                         self.lower_expr_accesses(span, e, LExpressionData::Variable(v), rest)?;
 
                     if !generics.is_empty() {
-                        todo!("Die: Deny generics on variable");
+                        return Err(AError::DenyGenerics {
+                            kind: "variable",
+                            name: v.name,
+                            use_span: span,
+                            def_span: v.span,
+                        });
                     }
 
                     data
@@ -505,13 +1089,27 @@ impl<'ctx> LoweringContext<'ctx> {
                         self.lower_expr_accesses(span, e, LExpressionData::Global(g.into()), rest)?;
 
                     if !generics.is_empty() {
-                        todo!("Die: Deny generics on global");
+                        let info = g.lookup(self.ctx);
+
+                        return Err(AError::DenyGenerics {
+                            kind: "global",
+                            name: info.name,
+                            use_span: span,
+                            def_span: info.span,
+                        });
                     }
 
                     data
                 },
                 (span, i, _) => {
-                    todo!("Die: Cannot access $what $item as an expression")
+                    let (kind, name, def_span) = i.info(self.ctx);
+
+                    return Err(AError::NotAnExpression {
+                        kind,
+                        name,
+                        def_span,
+                        use_span: span,
+                    });
                 },
             },
             PExpressionData::SelfRef => {
@@ -671,12 +1269,11 @@ impl<'ctx> LoweringContext<'ctx> {
                     data: LExpressionData::Literal(PLiteral::String(*l)),
                 }
                 .intern(self.ctx);
+                let a = self.lower_expr(*a)?;
                 let a = LExpression {
                     source: e,
                     span: *span,
-                    data: self.std_static_call(None, "into", vec![string], "into", vec![], vec![
-                        self.lower_expr(*a)?,
-                    ]),
+                    data: self.std_static_call(None, "Into", vec![string], "into", vec![], vec![a]),
                 }
                 .intern(self.ctx);
                 let al = LExpression {
@@ -706,12 +1303,11 @@ impl<'ctx> LoweringContext<'ctx> {
                     data: LExpressionData::Literal(PLiteral::String(*l)),
                 }
                 .intern(self.ctx);
+                let a = self.lower_expr(*a)?;
                 let a = LExpression {
                     source: e,
                     span: *span,
-                    data: self.std_static_call(None, "into", vec![string], "into", vec![], vec![
-                        self.lower_expr(*a)?,
-                    ]),
+                    data: self.std_static_call(None, "Into", vec![string], "into", vec![], vec![a]),
                 }
                 .intern(self.ctx);
 
@@ -770,17 +1366,10 @@ impl<'ctx> LoweringContext<'ctx> {
                         self.lower_expr(*e)?,
                     ),
                 ]),
-            PExpressionData::While(l, p, t, e) => {
-                self.enter_block();
-                let i = self.declare_label(*l);
-                let p = self.lower_expr(*p)?;
-                let t = self.lower_expr(*t)?;
-                let e = self.lower_expr(*e)?;
-                self.exit_block();
-
-                LExpressionData::While(i, p, t, e)
-            },
-            PExpressionData::For(l, p, es, t, e) => self.lower_expr_for(*l, *p, *es, *t, *e),
+            PExpressionData::While(l, p, t, els) =>
+                self.lower_expr_while(e, *span, *l, *p, *t, *els)?,
+            PExpressionData::For(l, p, es, t, els) =>
+                self.lower_expr_for(e, *span, *l, *p, *es, *t, *els)?,
             PExpressionData::Match(e, ps) => {
                 let m = self.lower_expr(*e)?;
 
@@ -799,79 +1388,117 @@ impl<'ctx> LoweringContext<'ctx> {
                 LScopeItem::Object(o) => {
                     let info = o.lookup(self.ctx);
                     if !info.is_structural {
-                        todo!("Die")
+                        return Err(AError::TriedAllocatingStruct {
+                            parent_name: info.name,
+                            parent_span: info.span,
+                            use_span: *span,
+                        });
                     }
 
                     let g = self.lower_tys(g, true)?;
-                    let g = self.check_generics_parity(*span, g, info.generics.len(), true)?;
+                    let g =
+                        self.check_generics_parity(g, *span, info.generics.len(), info.span, true)?;
 
                     let s = self.ctx.object_constructor(o)?;
-                    let a = self.lower_constructor(&s, a)?;
+                    let a = self.lower_constructor("object", info.name, &s, a)?;
 
                     LExpressionData::StructConstructor(o.into(), g, a)
                 },
                 LScopeItem::EnumVariant(e, v) => {
                     if !g.is_empty() {
-                        todo!("Die")
+                        return Err(AError::BareEnumGenerics {
+                            enum_name: e.lookup(self.ctx).name,
+                            variant_name: v,
+                            span: *span,
+                        });
                     }
 
                     let g = self.fresh_infer_tys(e.lookup(self.ctx).generics.len());
 
                     let s = self.ctx.enum_variant_constructor(e, v)?;
-                    let a = self.lower_constructor(&s, a)?;
+                    let a = self.lower_constructor("enum variant", v, &s, a)?;
 
                     LExpressionData::EnumConstructor(e.into(), g, v, a)
                 },
-                _ => todo!("Die"),
+                i => {
+                    let (kind, name, def_span) = i.info(self.ctx);
+
+                    return Err(AError::CannotConstruct {
+                        kind,
+                        name,
+                        def_span,
+                        use_span: *span,
+                    });
+                },
             },
             PExpressionData::StructuralVariant(p, g, v, a) => match self.lookup_path(p)? {
                 LScopeItem::Enum(e) => {
+                    let info = e.lookup(self.ctx);
+
                     let g = self.lower_tys(g, true)?;
-                    let g = self.check_generics_parity(
-                        *span,
-                        g,
-                        e.lookup(self.ctx).generics.len(),
-                        true,
-                    )?;
+                    let g =
+                        self.check_generics_parity(g, *span, info.generics.len(), info.span, true)?;
 
                     let s = self.ctx.enum_variant_constructor(e, *v)?;
-                    let a = self.lower_constructor(&s, a)?;
+                    let a = self.lower_constructor("enum variant", *v, &s, a)?;
 
                     LExpressionData::EnumConstructor(e.into(), g, *v, a)
                 },
-                _ => todo!("Die"),
+                i => {
+                    let (kind, name, _) = i.info(self.ctx);
+                    return Err(AError::NotAnEnumVariant {
+                        kind,
+                        name,
+                        variant: *v,
+                        use_span: *span,
+                    });
+                },
             },
             PExpressionData::Allocate(p, g, a) => match self.lookup_path(p)? {
                 LScopeItem::Object(o) => {
                     let info = o.lookup(self.ctx);
                     if info.is_structural {
-                        todo!("Die")
+                        return Err(AError::TriedConstructingObject {
+                            parent_name: info.name,
+                            parent_span: info.span,
+                            use_span: *span,
+                        });
                     }
+
                     let g = self.lower_tys(g, true)?;
-                    let g = self.check_generics_parity(*span, g, info.generics.len(), true)?;
+                    let g =
+                        self.check_generics_parity(g, *span, info.generics.len(), info.span, true)?;
 
                     let s = self.ctx.object_constructor(o)?;
-                    let a = self.lower_constructor(&s, a)?;
+                    let a = self.lower_constructor("object", info.name, &s, a)?;
 
                     LExpressionData::ObjectAllocation(o.into(), g, a)
                 },
-                _ => todo!("Die"),
+                i => {
+                    let (kind, name, def_span) = i.info(self.ctx);
+
+                    return Err(AError::CannotConstruct {
+                        kind,
+                        name,
+                        def_span,
+                        use_span: *span,
+                    });
+                },
             },
             PExpressionData::Return(v) =>
                 if self.scopes.last_mut().unwrap().return_allowed {
                     LExpressionData::Return(self.lower_expr(*v)?)
                 } else {
-                    todo!("Die")
+                    return Err(AError::IllegalReturn { span: *span });
                 },
             PExpressionData::Assert(v) => {
-                if let LScopeItem::Function(assert) = self.lookup_std_item("assert") {
+                if let LScopeItem::Function(assert) = self.lookup_std_item("assert_impl") {
                     LExpressionData::Call(assert.into(), vec![], vec![self.lower_expr(*v)?])
                 } else {
                     unreachable!()
                 }
             },
             PExpressionData::Break(b, l) => {
-                // TODO: This is a lot of work, it's kinda gross...
                 let e = if let Some(e) = b {
                     self.lower_expr(*e)?
                 } else {
@@ -921,16 +1548,17 @@ impl<'ctx> LoweringContext<'ctx> {
             PExpressionData::NamedAccess(o, span, i) =>
                 LExpressionData::Access(self.lower_expr(*o)?, *span, *i),
             PExpressionData::IndexAccess(o, span, i) => {
-                let i = i
-                    .lookup(self.ctx)
-                    .parse()
-                    .map_err(|e| AError::NotANumber("tuple index", *span, *i))?;
+                let i = i.lookup(self.ctx).parse().map_err(|e| AError::NotANumber {
+                    kind: "tuple index",
+                    number: *i,
+                    span: *span,
+                })?;
 
                 LExpressionData::IndexAccess(self.lower_expr(*o)?, *span, i)
             },
             PExpressionData::Await(a) => {
                 if !self.scopes.last().unwrap().await_allowed {
-                    todo!("Die")
+                    return Err(AError::IllegalAwait { span: *span });
                 }
 
                 LExpressionData::Await(self.lower_expr(*a)?)
@@ -1001,12 +1629,150 @@ impl<'ctx> LoweringContext<'ctx> {
         Ok(data)
     }
 
-    fn lower_expr_for() -> AResult<LExpressionData> {
-        todo!()
+    fn lower_expr_while(
+        &mut self,
+        source: Id<PExpression>,
+        span: Span,
+        label: Option<Id<str>>,
+        condition: Id<PExpression>,
+        t: Id<PExpression>,
+        e: Id<PExpression>,
+    ) -> AResult<LExpressionData> {
+        self.enter_block();
+        let label = self.declare_label(label);
+        let condition = self.lower_expr(condition)?;
+        let t = self.lower_expr(t)?;
+        let e = self.lower_expr(e)?;
+        self.exit_block();
+
+        Ok(LExpressionData::Loop(
+            label,
+            LExpression {
+                source,
+                span,
+                data: LExpressionData::If(condition, t, e),
+            }
+            .intern(self.ctx),
+        ))
+    }
+
+    fn lower_expr_for(
+        &mut self,
+        source: Id<PExpression>,
+        span: Span,
+        label: Option<Id<str>>,
+        pattern: Id<PPattern>,
+        iterable: Id<PExpression>,
+        t: Id<PExpression>,
+        e: Id<PExpression>,
+    ) -> AResult<LExpressionData> {
+        self.enter_block();
+
+        let iterator_var = self.declare_variable(
+            fresh_name("for").intern(self.ctx),
+            span,
+            self.fresh_infer_ty(),
+        );
+
+        let iterable = self.lower_expr(iterable)?;
+        let iterable_to_iterator = LStatement {
+            source: None,
+            span,
+            data: LStatementData::Let(
+                LPattern {
+                    source: None,
+                    span,
+                    ty: self.fresh_infer_ty(),
+                    data: LPatternData::Variable(iterator_var),
+                }
+                .intern(self.ctx),
+                LExpression {
+                    source,
+                    span,
+                    data: self.std_static_call(None, "Iterable", vec![], "iterator", vec![], vec![
+                        iterable,
+                    ]),
+                }
+                .intern(self.ctx),
+            ),
+        }
+        .intern(self.ctx);
+
+        let next_call = LExpression {
+            source,
+            span,
+            data: self.std_static_call(None, "Iterator", vec![], "next", vec![], vec![
+                LExpression {
+                    source,
+                    span,
+                    data: LExpressionData::Variable(iterator_var),
+                }
+                .intern(self.ctx),
+            ]),
+        }
+        .intern(self.ctx);
+
+        let option_enum = if let LScopeItem::Enum(option_enum) = self.lookup_std_item("Option") {
+            option_enum
+        } else {
+            unreachable!()
+        };
+
+        self.enter_block();
+        let pattern = self.lower_pattern(pattern)?;
+        let good_pattern = LPattern {
+            source: None,
+            span,
+            ty: self.fresh_infer_ty(),
+            data: LPatternData::EnumVariantPattern(
+                option_enum.into(),
+                vec![self.fresh_infer_ty()],
+                self.ctx.static_name("Some"),
+                vec![pattern],
+            ),
+        }
+        .intern(self.ctx);
+        let good_path = self.lower_expr(t)?;
+        self.exit_block();
+
+        let bad_pattern = LPattern {
+            source: None,
+            span,
+            ty: self.fresh_infer_ty(),
+            data: LPatternData::Underscore,
+        }
+        .intern(self.ctx);
+        let bad_path = self.lower_expr(e)?;
+
+        let unwrap_match = LExpression {
+            source,
+            span,
+            data: LExpressionData::Match(next_call, vec![
+                (good_pattern, good_path),
+                (bad_pattern, bad_path),
+            ]),
+        }
+        .intern(self.ctx);
+
+        let label = self.declare_label(label);
+
+        let unwrap_loop = LExpression {
+            source,
+            span,
+            data: LExpressionData::Loop(label, unwrap_match),
+        }
+        .intern(self.ctx);
+
+        self.exit_block();
+
+        Ok(LExpressionData::Block(
+            vec![iterable_to_iterator],
+            unwrap_loop,
+        ))
     }
 
     fn lower_expr_throw(
-        &self,
+        &mut self,
         source: Id<PExpression>,
         span: Span,
         throwable: Id<PExpression>,
@@ -1060,6 +1826,7 @@ impl<'ctx> LoweringContext<'ctx> {
             data: LExpressionData::Variable(good_var),
         }
         .intern(self.ctx);
+
         let bad_pattern = LPattern {
             source: None,
             span,
@@ -1088,7 +1855,9 @@ impl<'ctx> LoweringContext<'ctx> {
     }
 
     fn lower_constructor(
-        &self,
+        &mut self,
+        parent_kind: &'static str,
+        parent_name: Id<str>,
         shape: &LConstructorShape,
         args: &PConstructorArguments,
     ) -> AResult<Vec<(usize, Id<LExpression>)>> {
@@ -1098,30 +1867,66 @@ impl<'ctx> LoweringContext<'ctx> {
                 if es.len() == *n {
                     Ok(self.lower_exprs(es)?.into_iter().enumerate().collect())
                 } else {
-                    todo!("Die")
+                    return Err(AError::ParityDisparity {
+                        kind: "constructor",
+                        expected: *n,
+                        expected_span: *s,
+                        given: es.len(),
+                        given_span: *s2,
+                    });
                 },
             (LConstructorShape::Named(s, expected), PConstructorArguments::Named(s2, given)) => {
-                let seen = hashmap! {};
-                let args = vec![];
+                let mut seen = hashmap! {};
+                let mut args = vec![];
 
                 for (is, n, e) in given {
                     if let Some(old_is) = seen.insert(*n, *is) {
-                        todo!("Die")
+                        return Err(AError::DuplicatedDefinition {
+                            kind: "constructor field",
+                            name: *n,
+                            span: *is,
+                            span2: old_is,
+                        });
                     }
                     if let Some((pos, _)) = expected.get(n) {
                         args.push((*pos, self.lower_expr(*e)?));
                     } else {
-                        todo!("Die, Unexpected arg n in s2")
+                        return Err(AError::UnexpectedSubItem {
+                            parent_kind,
+                            parent_name,
+                            item_kind: "field",
+                            item_name: *n,
+                            span: *is,
+                        });
                     }
                 }
 
                 for (n, (_, is)) in expected {
                     if !seen.contains_key(n) {
-                        todo!("Die, missing arg n in s2")
+                        return Err(AError::ExpectedSubItem {
+                            parent_kind,
+                            parent_name,
+                            item_kind: "field",
+                            item_name: *n,
+                            span: *is,
+                        });
                     }
                 }
 
                 Ok(args)
+            },
+            (expected, given) => {
+                let (expected_kind, expected_span) = expected.info();
+                let (given_kind, given_span) = given.info();
+
+                return Err(AError::IncorrectConstructor {
+                    parent_kind,
+                    parent_name,
+                    expected_kind,
+                    expected_span,
+                    given_kind,
+                    given_span,
+                });
             },
         }
     }
@@ -1168,47 +1973,67 @@ impl<'ctx> LoweringContext<'ctx> {
                 LScopeItem::Object(o) => {
                     let info = o.lookup(self.ctx);
                     if !info.is_structural {
-                        todo!("Die")
+                        return Err(AError::TriedDestructuringObject {parent_name: info.name, parent_span: info.span, use_span: *span });
                     }
 
                     let g = self.lower_tys(g, true)?;
-                    let g = self.check_generics_parity(*span, g, info.generics.len(), true)?;
+                    let g =
+                        self.check_generics_parity(g, *span, info.generics.len(), info.span, true)?;
 
                     let s = self.ctx.object_constructor(o)?;
-                    let a = self.lower_destructor(&s, a)?;
+                    let a = self.lower_destructor("object", info.name, &s, a)?;
 
                     LPatternData::StructPattern(o.into(), g, a)
                 },
                 LScopeItem::EnumVariant(e, v) => {
                     if !g.is_empty() {
-                        todo!("Die")
+                        return Err(AError::BareEnumGenerics {
+                            enum_name: e.lookup(self.ctx).name,
+                            variant_name: v,
+                            span: *span,
+                        });
                     }
 
                     let g = self.fresh_infer_tys(e.lookup(self.ctx).generics.len());
 
                     let s = self.ctx.enum_variant_constructor(e, v)?;
-                    let a = self.lower_destructor(&s, a)?;
+                    let a = self.lower_destructor("enum variant", v, &s, a)?;
 
                     LPatternData::EnumVariantPattern(e.into(), g, v, a)
                 },
-                _ => todo!("Die"),
+                i => {
+                    let (kind, name, def_span) = i.info(self.ctx);
+
+                    return Err(AError::CannotConstruct {
+                        kind,
+                        name,
+                        def_span,
+                        use_span: *span,
+                    });
+                }
             },
             PPatternData::StructuralVariant(p, g, v, a) => match self.lookup_path(p)? {
                 LScopeItem::Enum(e) => {
+                    let info = e.lookup(self.ctx);
+
                     let g = self.lower_tys(g, true)?;
-                    let g = self.check_generics_parity(
-                        *span,
-                        g,
-                        e.lookup(self.ctx).generics.len(),
-                        true,
-                    )?;
+                    let g =
+                        self.check_generics_parity(g, *span, info.generics.len(), info.span, true)?;
 
                     let s = self.ctx.enum_variant_constructor(e, *v)?;
-                    let a = self.lower_destructor(&s, a)?;
+                    let a = self.lower_destructor("enum variant", *v, &s, a)?;
 
                     LPatternData::EnumVariantPattern(e.into(), g, *v, a)
                 },
-                _ => todo!("Die"),
+                i => {
+                    let (kind, name, _) = i.info(self.ctx);
+                    return Err(AError::NotAnEnumVariant {
+                        kind,
+                        name,
+                        variant: *v,
+                        use_span: *span,
+                    });
+                },
             },
         };
         Ok(LPattern {
@@ -1222,6 +2047,8 @@ impl<'ctx> LoweringContext<'ctx> {
 
     fn lower_destructor(
         &mut self,
+        parent_kind: &'static str,
+        parent_name: Id<str>,
         shape: &LConstructorShape,
         constructor: &PPatternConstructorArguments,
     ) -> AResult<Vec<Id<LPattern>>> {
@@ -1232,10 +2059,16 @@ impl<'ctx> LoweringContext<'ctx> {
                 PPatternConstructorArguments::Positional(s2, ps, ignore),
             ) => {
                 if (!ignore && *n < ps.len()) || (*n > ps.len()) {
-                    todo!("Die")
+                    return Err(AError::ParityDisparity {
+                        kind: "pattern arguments",
+                        expected: *n,
+                        expected_span: *s,
+                        given: ps.len(),
+                        given_span: *s2,
+                    });
                 }
 
-                let ps = self.lower_patterns(ps)?;
+                let mut ps = self.lower_patterns(ps)?;
                 // Extend with any missing members
                 ps.extend((ps.len()..*n).map(|_| self.fresh_empty_pattern(*s2)));
 
@@ -1245,24 +2078,41 @@ impl<'ctx> LoweringContext<'ctx> {
                 LConstructorShape::Named(s, expected),
                 PPatternConstructorArguments::Named(s2, given, ignore),
             ) => {
-                let seen = hashmap! {};
-                let args = vec![];
+                let mut seen = hashmap! {};
+                let mut args = vec![None; expected.len()];
 
                 for (is, n, p) in given {
                     if let Some(old_is) = seen.insert(*n, *is) {
-                        todo!("Die")
+                        return Err(AError::DuplicatedDefinition {
+                            kind: "constructor field",
+                            name: *n,
+                            span: *is,
+                            span2: old_is,
+                        });
                     }
                     if let Some((pos, _)) = expected.get(n) {
                         args[*pos] = Some(self.lower_pattern(*p)?);
                     } else {
-                        todo!("Die, Unexpected arg n in s2")
+                        return Err(AError::UnexpectedSubItem {
+                            parent_kind,
+                            parent_name,
+                            item_kind: "field",
+                            item_name: *n,
+                            span: *is,
+                        });
                     }
                 }
 
                 if !ignore {
                     for (n, (_, is)) in expected {
                         if !seen.contains_key(n) {
-                            todo!("Die, missing arg n in s2")
+                            return Err(AError::ExpectedSubItem {
+                                parent_kind,
+                                parent_name,
+                                item_kind: "field",
+                                item_name: *n,
+                                span: *is,
+                            });
                         }
                     }
                 }
@@ -1273,7 +2123,19 @@ impl<'ctx> LoweringContext<'ctx> {
                     .map(|p| p.unwrap_or_else(|| self.fresh_empty_pattern(*s2)))
                     .collect())
             },
-            _ => todo!("Die"),
+            (expected, given) => {
+                let (expected_kind, expected_span) = expected.info();
+                let (given_kind, given_span) = given.info();
+
+                return Err(AError::IncorrectConstructor {
+                    parent_kind,
+                    parent_name,
+                    expected_kind,
+                    expected_span,
+                    given_kind,
+                    given_span,
+                });
+            },
         }
     }
 
@@ -1316,6 +2178,27 @@ impl<'ctx> LoweringContext<'ctx> {
         var
     }
 
+    fn declare_generic(&mut self, name: Id<str>, span: Span) -> AResult<LGeneric> {
+        let scope = self.scopes.last_mut().unwrap();
+        let generic = LGeneric {
+            id: fresh_id(),
+            name,
+            span,
+        };
+
+        debug!("Inserting generic {:?} = {}", name, name.lookup(self.ctx));
+        if let Some(LGeneric { span: old_span, .. }) = scope.generics.insert(name, generic) {
+            return Err(AError::DuplicatedDefinition {
+                kind: "generic",
+                name,
+                span,
+                span2: old_span,
+            });
+        }
+
+        Ok(generic)
+    }
+
     fn declare_label(&mut self, label: Option<Id<str>>) -> usize {
         let label = label.unwrap_or_else(|| fresh_name("LABEL").intern(self.ctx));
         let id = fresh_id();
@@ -1335,22 +2218,33 @@ impl<'ctx> LoweringContext<'ctx> {
             }
         }
 
-        todo!("Die")
+        if let Some(l) = l {
+            Err(AError::MissingLabel { span: s, name: l })
+        } else {
+            Err(AError::NotInLoop{ span: s })
+        }
     }
 
     fn check_generics_parity(
         &self,
-        span: Span,
-        generics: Vec<Id<LType>>,
-        num: usize,
+        given: Vec<Id<LType>>,
+        given_span: Span,
+        expected: usize,
+        expected_span: Span,
         infer_allowed: bool,
     ) -> AResult<Vec<Id<LType>>> {
-        if generics.len() == num {
-            Ok(generics)
-        } else if generics.is_empty() && infer_allowed {
-            Ok((0..num).map(|_| self.fresh_infer_ty()).collect())
+        if given.len() == expected {
+            Ok(given)
+        } else if given.is_empty() && infer_allowed {
+            Ok((0..expected).map(|_| self.fresh_infer_ty()).collect())
         } else {
-            Err(AError::IncorrectGenerics(span, generics.len(), num))
+            Err(AError::ParityDisparity {
+                kind: "generic types",
+                expected,
+                expected_span,
+                given: given.len(),
+                given_span,
+            })
         }
     }
 
@@ -1404,6 +2298,7 @@ struct FunctionScope {
     await_allowed: bool,
     variable_scopes: Vec<HashMap<Id<str>, LVariable>>,
     label_scopes: Vec<(Id<str>, usize)>,
+    generics: HashMap<Id<str>, LGeneric>,
     vcx: LVariableContext,
 }
 
@@ -1420,6 +2315,7 @@ impl FunctionScope {
             await_allowed,
             variable_scopes: vec![],
             label_scopes: vec![],
+            generics: hashmap! {},
             vcx: LVariableContext {
                 variables: btreemap! {},
                 captures: btreemap! {},
@@ -1463,6 +2359,13 @@ pub struct LVariable {
     span: Span,
 }
 
+#[derive(Copy, Clone, Debug, Hash, Eq, PartialEq, PrettyPrint)]
+pub struct LGeneric {
+    id: usize,
+    name: Id<str>,
+    span: Span,
+}
+
 #[derive(Debug, Hash, Eq, PartialEq, Lookup, PrettyPrint)]
 pub enum LType {
     Infer(usize),
@@ -1480,6 +2383,7 @@ pub enum LType {
     Object(LId<LObject>, Vec<Id<LType>>),
     Enum(LId<LEnum>, Vec<Id<LType>>),
     Associated(Id<LType>, Option<Id<LTraitType>>, Id<str>),
+    Generic(LGeneric),
 }
 
 #[derive(Debug, Hash, Eq, PartialEq, Lookup, PrettyPrint)]
@@ -1540,7 +2444,7 @@ enum LExpressionData {
         Id<LExpression>,
     ),
     If(Id<LExpression>, Id<LExpression>, Id<LExpression>),
-    While(usize, Id<LExpression>, Id<LExpression>, Id<LExpression>),
+    Loop(usize, Id<LExpression>),
     Match(Id<LExpression>, Vec<(Id<LPattern>, Id<LExpression>)>),
 }
 
@@ -1606,6 +2510,14 @@ impl LateLookup for LGlobal {
 pub struct LFunction {
     #[plain]
     source: Id<PFunction>,
+    span: Span,
+    name: Id<str>,
+    generics: Vec<LGeneric>,
+    parameters: Vec<LVariable>,
+    return_ty: Id<LType>,
+    restrictions: Vec<(Id<LType>, Id<LTraitType>)>,
+    body: Option<Id<LExpression>>,
+    vcx: LVariableContext,
 }
 
 impl LateLookup for LFunction {
@@ -1626,6 +2538,12 @@ impl LateLookup for LFunction {
 pub struct LObject {
     #[plain]
     source: Id<PObject>,
+    span: Span,
+    name: Id<str>,
+    is_structural: bool,
+    generics: Vec<LGeneric>,
+    restrictions: Vec<(Id<LType>, Id<LTraitType>)>,
+    members: LMembers,
 }
 
 impl LateLookup for LObject {
@@ -1643,7 +2561,15 @@ impl LateLookup for LObject {
 }
 
 #[derive(Debug, Hash, Eq, PartialEq, Lookup, PrettyPrint)]
-pub struct LEnum {}
+pub struct LEnum {
+    #[plain]
+    source: Id<PEnum>,
+    span: Span,
+    name: Id<str>,
+    generics: Vec<LGeneric>,
+    restrictions: Vec<(Id<LType>, Id<LTraitType>)>,
+    variants: BTreeMap<Id<str>, LMembers>,
+}
 
 impl LateLookup for LEnum {
     type Source = PEnum;
@@ -1660,7 +2586,27 @@ impl LateLookup for LEnum {
 }
 
 #[derive(Debug, Hash, Eq, PartialEq, Lookup, PrettyPrint)]
-pub struct LTrait {}
+pub struct LTrait {
+    #[plain]
+    source: Id<PTrait>,
+    span: Span,
+    name: Id<str>,
+    generics: Vec<LGeneric>,
+    restrictions: Vec<(Id<LType>, Id<LTraitType>)>,
+    types: BTreeMap<Id<str>, Vec<Id<LTraitType>>>,
+    methods: BTreeMap<Id<str>, LTraitMethod>,
+}
+
+#[derive(Debug, Hash, Eq, PartialEq, PrettyPrint)]
+pub struct LTraitMethod {
+    parent: LId<LTrait>,
+    span: Span,
+    name: Id<str>,
+    generics: Vec<LGeneric>,
+    parameters: Vec<LVariable>,
+    restrictions: Vec<(Id<LType>, Id<LTraitType>)>,
+    return_ty: Id<LType>,
+}
 
 impl LateLookup for LTrait {
     type Source = PTrait;
@@ -1677,7 +2623,30 @@ impl LateLookup for LTrait {
 }
 
 #[derive(Debug, Hash, Eq, PartialEq, Lookup, PrettyPrint)]
-pub struct LImpl {}
+pub struct LImpl {
+    #[plain]
+    source: Id<PImpl>,
+    span: Span,
+    ty: Id<LType>,
+    trait_ty: Option<Id<LTraitType>>,
+    generics: Vec<LGeneric>,
+    restrictions: Vec<(Id<LType>, Id<LTraitType>)>,
+    types: BTreeMap<Id<str>, Id<LType>>,
+    methods: BTreeMap<Id<str>, LImplMethod>,
+}
+
+#[derive(Debug, Hash, Eq, PartialEq, PrettyPrint)]
+pub struct LImplMethod {
+    parent: LId<LImpl>,
+    span: Span,
+    name: Id<str>,
+    generics: Vec<LGeneric>,
+    parameters: Vec<LVariable>,
+    restrictions: Vec<(Id<LType>, Id<LTraitType>)>,
+    return_ty: Id<LType>,
+    body: Id<LExpression>,
+    vcx: LVariableContext,
+}
 
 impl LateLookup for LImpl {
     type Source = PImpl;
@@ -1703,6 +2672,7 @@ pub enum LScopeItem {
     EnumVariant(Id<PEnum>, Id<str>),
     Trait(Id<PTrait>),
     Variable(LVariable),
+    Generic(LGeneric),
 }
 
 impl LScopeItem {
@@ -1750,6 +2720,7 @@ impl LScopeItem {
                 ("trait", e.name, e.span)
             },
             LScopeItem::Variable(LVariable { name, span, .. }) => ("variable", *name, *span),
+            LScopeItem::Generic(LGeneric { name, span, .. }) => ("generic", *name, *span),
         }
     }
 }
@@ -1779,7 +2750,12 @@ pub fn get_bound_names(
         match i {
             PTraitMember::Type(span, name, _) => {
                 if let Some(old_span) = bounds.get(name) {
-                    todo!("Die")
+                    return Err(AError::DuplicatedDefinition {
+                        kind: "trait bound",
+                        name: *name,
+                        span: *span,
+                        span2: *old_span,
+                    });
                 }
 
                 bounds.insert(*name, *span);
@@ -1791,11 +2767,28 @@ pub fn get_bound_names(
     Ok(Arc::new(bounds))
 }
 
+#[derive(Debug, Hash, Eq, PartialEq, PrettyPrint)]
+pub enum LMembers {
+    Empty(Span),
+    Positional(Span, Vec<Id<LType>>),
+    Named(Span, Vec<Id<LType>>, BTreeMap<Id<str>, (usize, Span)>),
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub enum LConstructorShape {
     Empty(Span),
     Positional(Span, usize),
     Named(Span, HashMap<Id<str>, (usize, Span)>),
+}
+
+impl LConstructorShape {
+    fn info(&self) -> (&'static str, Span) {
+        match self {
+            LConstructorShape::Empty(s) => ("no", *s),
+            LConstructorShape::Positional(s, _) => ("positional", *s),
+            LConstructorShape::Named(s, _) => ("named", *s),
+        }
+    }
 }
 
 pub fn object_constructor(
@@ -1810,8 +2803,13 @@ pub fn object_constructor(
             let mut members = hashmap! {};
 
             for (i, (s, n, _)) in es.iter().enumerate() {
-                if let Some(old_s) = members.insert(*n, (i, *s)) {
-                    todo!("Die")
+                if let Some((_, old_s)) = members.insert(*n, (i, *s)) {
+                    return Err(AError::DuplicatedDefinition {
+                        kind: "object member",
+                        name: *n,
+                        span: *s,
+                        span2: old_s,
+                    });
                 }
             }
 
@@ -1826,7 +2824,9 @@ pub fn enum_variant_constructor(
     e: Id<PEnum>,
     v: Id<str>,
 ) -> AResult<Arc<LConstructorShape>> {
-    for (span, variant, members) in &e.lookup(ctx).variants {
+    let info = e.lookup(ctx);
+
+    for (span, variant, members) in &info.variants {
         if *variant == v {
             let data = match members {
                 crate::parser::PObjectMembers::Empty(s) => LConstructorShape::Empty(*s),
@@ -1836,8 +2836,13 @@ pub fn enum_variant_constructor(
                     let mut members = hashmap! {};
 
                     for (i, (s, n, _)) in es.iter().enumerate() {
-                        if let Some(old_s) = members.insert(*n, (i, *s)) {
-                            todo!("Die")
+                        if let Some((_, old_s)) = members.insert(*n, (i, *s)) {
+                            return Err(AError::DuplicatedDefinition {
+                                kind: "enum variant field",
+                                name: *n,
+                                span: *s,
+                                span2: old_s,
+                            });
                         }
                     }
 
@@ -1848,5 +2853,55 @@ pub fn enum_variant_constructor(
             return Ok(Arc::new(data));
         }
     }
-    todo!("Die, no variant")
+
+    Err(AError::MissingSubItemNoUsage {
+        parent_kind: "enum",
+        parent_name: info.name,
+        parent_span: info.span,
+        child_kind: "variant",
+        child_name: v
+    })
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct LTraitShape {
+    types: HashMap<Id<str>, Span>,
+    methods: HashMap<Id<str>, Span>,
+}
+
+pub fn trait_shape(ctx: &dyn AdelaideContext, key: Id<PTrait>) -> AResult<Arc<LTraitShape>> {
+    let mut seen = hashmap! {};
+    let mut types = hashmap! {};
+    let mut methods = hashmap! {};
+
+    for m in &key.lookup(ctx).members {
+        match m {
+            PTraitMember::Type(s, n, _) => {
+                if let Some(old_s) = seen.insert(*n, *s) {
+                    return Err(AError::DuplicatedDefinition {
+                        kind: "associated type",
+                        name: *n,
+                        span: *s,
+                        span2: old_s,
+                    });
+                }
+
+                types.insert(*n, *s);
+            },
+            PTraitMember::Function { span, name, .. } => {
+                if let Some(old_s) = seen.insert(*name, *span) {
+                    return Err(AError::DuplicatedDefinition {
+                        kind: "method",
+                        name: *name,
+                        span: *span,
+                        span2: old_s,
+                    });
+                }
+
+                methods.insert(*name, *span);
+            },
+        }
+    }
+
+    Ok(Arc::new(LTraitShape { types, methods }))
 }

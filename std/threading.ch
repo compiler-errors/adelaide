@@ -20,8 +20,8 @@ impl Self for Thread {
 
   // Wait for a thread to complete, return the value yielded by the thread.
   fn join(self) -> Dyn<Any> = {
-    if self:id == Thread:current():id {
-      panic:<()>("Cannot Thread:join() on the running thread::").
+    if self:id == Thread::current():id {
+      panic:<()>("Cannot Thread::join() on the running thread").
     }
 
     while true {
@@ -35,7 +35,7 @@ impl Self for Thread {
     }
   }.
 
-  // Convenience function. Same as Thread:join, but explicitly downcast.
+  // Convenience function. Same as Thread::join, but explicitly downcast.
   // Panics if the joined value isn't the specified concrete type.
   fn join_as<T>(self) -> T = {
     self:join():downcast()
@@ -44,8 +44,8 @@ impl Self for Thread {
   // Waits until all threads are finished. This is only allowed to be executed
   // on the main thread, will panic otherwise.
   fn coalesce() = {
-    if Thread:current():id != 0 {
-      panic:<()>("Can only call Thread:coalesce on the main thread").
+    if Thread::current():id != 0 {
+      panic:<()>("Can only call Thread::coalesce on the main thread").
     }
 
     while (todo()) > 1 {

@@ -6,7 +6,7 @@ use crate::{
     ctx::AdelaideContext,
     file::AFile,
     lexer::{Span, Token},
-    util::{Id, LId, LateLookup, Lookup},
+    util::{Id, LId, LateLookup, Lookup, PrettyPrint},
 };
 
 #[derive(Copy, Clone, Debug, Hash, Eq, PartialEq, PrettyPrint)]
@@ -51,6 +51,28 @@ impl LateLookup for PModule {
 
     fn late_lookup(id: Id<Self::Source>, ctx: &dyn AdelaideContext) -> Id<Self> {
         ctx.parse_mod(id).unwrap()
+    }
+}
+
+#[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
+pub struct PModPath(pub Id<PModule>);
+
+impl PrettyPrint for PModPath {
+    fn fmt(&self, f: &mut std::fmt::Formatter, ctx: &dyn AdelaideContext) -> std::fmt::Result {
+        match self.0.lookup(ctx).source.lookup(ctx).mod_path.as_slice() {
+            &[] => write!(f, "<ROOT>"),
+            path => {
+                for (i, p) in path.iter().enumerate() {
+                    if i != 0 {
+                        write!(f, "::")?;
+                    }
+
+                    write!(f, "{}", p)?;
+                }
+
+                Ok(())
+            },
+        }
     }
 }
 
@@ -244,7 +266,7 @@ pub enum PTraitMember {
         span: Span,
         name: Id<str>,
         generics: Vec<(Span, Id<str>)>,
-        has_self: bool,
+        has_self: Option<Span>,
         parameters: Vec<(Span, Id<str>, Id<PType>)>,
         return_ty: Id<PType>,
         restrictions: Vec<(Id<PType>, Vec<Id<PTraitType>>)>,
@@ -264,7 +286,7 @@ impl PTraitMember {
         span: Span,
         name: Id<str>,
         generics: Vec<(Span, Id<str>)>,
-        has_self: bool,
+        has_self: Option<Span>,
         parameters: Vec<(Span, Id<str>, Id<PType>)>,
         return_ty: Id<PType>,
         restrictions: Vec<(Id<PType>, Vec<Id<PTraitType>>)>,
@@ -321,7 +343,7 @@ pub enum PImplMember {
         span: Span,
         name: Id<str>,
         generics: Vec<(Span, Id<str>)>,
-        has_self: bool,
+        has_self: Option<Span>,
         parameters: Vec<(Span, Id<str>, Id<PType>)>,
         return_ty: Id<PType>,
         restrictions: Vec<(Id<PType>, Vec<Id<PTraitType>>)>,
@@ -338,7 +360,7 @@ impl PImplMember {
         span: Span,
         name: Id<str>,
         generics: Vec<(Span, Id<str>)>,
-        has_self: bool,
+        has_self: Option<Span>,
         parameters: Vec<(Span, Id<str>, Id<PType>)>,
         return_ty: Id<PType>,
         restrictions: Vec<(Id<PType>, Vec<Id<PTraitType>>)>,
@@ -1065,6 +1087,16 @@ pub enum PConstructorArguments {
     Named(Span, Vec<(Span, Id<str>, Id<PExpression>)>),
 }
 
+impl PConstructorArguments {
+    pub fn info(&self) -> (&'static str, Span) {
+        match self {
+            PConstructorArguments::Empty(s) => ("no", *s),
+            PConstructorArguments::Positional(s, _) => ("positional", *s),
+            PConstructorArguments::Named(s, _) => ("named", *s),
+        }
+    }
+}
+
 #[derive(Copy, Clone, Debug, Hash, Eq, PartialEq, PrettyPrint)]
 pub enum PLiteral {
     True,
@@ -1197,4 +1229,14 @@ pub enum PPatternConstructorArguments {
     Empty(Span),
     Positional(Span, Vec<Id<PPattern>>, bool),
     Named(Span, Vec<(Span, Id<str>, Id<PPattern>)>, bool),
+}
+
+impl PPatternConstructorArguments {
+    pub fn info(&self) -> (&'static str, Span) {
+        match self {
+            PPatternConstructorArguments::Empty(s) => ("no", *s),
+            PPatternConstructorArguments::Positional(s, _, _) => ("positional", *s),
+            PPatternConstructorArguments::Named(s, _, _) => ("named", *s),
+        }
+    }
 }

@@ -15,7 +15,7 @@ impl<T> Poll for Awaitable<T> {
     type Result = T.
 
      fn poll(self) -> (PollState<T>, Self) = {
-        let (poll_state, new_self) = ch_awaitable_poll().
+        let (poll_state, new_self) = todo().
 
         // NOTE: self is a heap object (heap awaitable), so
         // we can just return it by reference.
