@@ -19,7 +19,7 @@ use crate::{
         PTrait, PTraitType, PType, PUse,
     },
     read::{RawFile, RawFileSource},
-    util::{AResult, Id, Intern, LId, Opaque},
+    util::{AResult, Id, Intern, Opaque},
 };
 
 #[salsa::query_group(AdelaideStorage)]

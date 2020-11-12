@@ -8,7 +8,6 @@ use std::{
     collections::BTreeMap,
     ffi::OsStr,
     path::{Path, PathBuf},
-    sync::Arc,
 };
 
 lazy_static! {

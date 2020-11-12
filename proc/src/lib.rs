@@ -82,11 +82,11 @@ fn lookup_derive(s: Structure) -> TokenStream {
 
     s.gen_impl(quote! {
         gen impl ::adelaide::util::Lookup for @Self {
-            fn lookup(id: ::adelaide::util::Id<Self>, ctx: &dyn ::adelaide::ctx::AdelaideContext) -> Arc<Self> {
+            fn lookup(id: ::adelaide::util::Id<Self>, ctx: &dyn ::adelaide::ctx::AdelaideContext) -> ::std::sync::Arc<Self> {
                 ::adelaide::ctx::AdelaideContext::#lookup_fn(ctx, id)
             }
 
-            fn intern_self(self: Arc<Self>, ctx: &dyn ::adelaide::ctx::AdelaideContext) -> ::adelaide::util::Id<Self> {
+            fn intern_self(self: ::std::sync::Arc<Self>, ctx: &dyn ::adelaide::ctx::AdelaideContext) -> ::adelaide::util::Id<Self> {
                 ::adelaide::ctx::AdelaideContext::#intern_fn(ctx, self)
             }
         }
@@ -126,15 +126,15 @@ fn parse_message(message: LitStr) -> (LitStr, HashSet<Ident>) {
     (LitStr::new(&out, message.span()), idents)
 }
 
-fn is_message_attr<'a>(attr: &&Attribute) -> bool {
+fn is_message_attr(attr: &&Attribute) -> bool {
     attr.path == syn::parse_str("message").expect("Can't parse message")
 }
 
-fn is_span_attr<'a>(attr: &&Attribute) -> bool {
+fn is_span_attr(attr: &&Attribute) -> bool {
     attr.path == syn::parse_str("span").expect("Can't parse span")
 }
 
-fn is_note_attr<'a>(attr: &&Attribute) -> bool {
+fn is_note_attr(attr: &&Attribute) -> bool {
     attr.path == syn::parse_str("note").expect("Can't parse note")
 }
 

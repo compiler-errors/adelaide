@@ -1,4 +1,5 @@
 #![feature(once_cell)]
+#![warn(clippy::pedantic)]
 
 #[macro_use]
 extern crate maplit;

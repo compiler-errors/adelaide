@@ -1,14 +1,9 @@
 use std::path::PathBuf;
 
-use codespan_reporting::diagnostic::{Diagnostic, Label};
+use codespan_reporting::diagnostic::Diagnostic;
 
 use crate::{
-    ctx::AdelaideContext,
-    file::AFile,
-    lexer::Span,
-    lowering::{LScopeItem, LUseError, LUseItem},
-    parser::{PEnum, PModPath, PModule},
-    util::Id,
+    ctx::AdelaideContext, file::AFile, lexer::Span, lowering::LUseError, parser::PModPath, util::Id,
 };
 
 pub type AResult<T> = std::result::Result<T, AError>;

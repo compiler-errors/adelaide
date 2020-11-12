@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, sync::Arc};
+use std::collections::VecDeque;
 
 use either::Either;
 
@@ -6,7 +6,7 @@ use crate::{
     ctx::AdelaideContext,
     file::AFile,
     lexer::{Span, Token},
-    util::{Id, LId, LateLookup, Lookup, PrettyPrint},
+    util::{Id, LId, LateLookup, PrettyPrint},
 };
 
 #[derive(Copy, Clone, Debug, Hash, Eq, PartialEq, PrettyPrint)]
@@ -22,7 +22,7 @@ pub enum PItem {
 }
 
 impl PItem {
-    pub fn parent(self, ctx: &dyn AdelaideContext) -> Id<PModule> {
+    /*pub fn parent(self, ctx: &dyn AdelaideContext) -> Id<PModule> {
         match self {
             PItem::Module(m) => m.lookup(ctx).parent.get(ctx),
             PItem::Use(u) => u.lookup(ctx).parent.get(ctx),
@@ -33,7 +33,7 @@ impl PItem {
             PItem::Trait(t) => t.lookup(ctx).parent.get(ctx),
             PItem::Impl(i) => i.lookup(ctx).parent.get(ctx),
         }
-    }
+    }*/
 }
 
 #[derive(Debug, Hash, Eq, PartialEq, Lookup, PrettyPrint)]

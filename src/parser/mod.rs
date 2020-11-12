@@ -13,7 +13,7 @@ use crate::{
     ctx::AdelaideContext,
     file::AFile,
     lexer::{Lexer, Span, SpanToken, Token},
-    util::{AError, AResult, Id, Intern, LId},
+    util::{AError, AResult, Id, Intern},
 };
 
 pub fn parse_root(ctx: &dyn AdelaideContext) -> AResult<Id<PModule>> {

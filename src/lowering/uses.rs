@@ -5,7 +5,6 @@ use std::{
 
 use crate::{
     ctx::AdelaideContext,
-    file::AFile,
     lexer::Span,
     parser::{PEnum, PFunction, PGlobal, PItem, PModPath, PModule, PObject, PTrait},
     util::{AError, AResult, Id, Intern, Opaque, Pretty},
