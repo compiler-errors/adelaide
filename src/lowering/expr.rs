@@ -747,6 +747,11 @@ impl LoweringContext<'_> {
             span,
             self.fresh_infer_ty(),
         );
+        let new_iterator_var = self.declare_variable(
+            fresh_name("for").intern(self.ctx),
+            span,
+            self.fresh_infer_ty(),
+        );
 
         let iterable = self.lower_expr(iterable)?;
         let iterable_to_iterator = LStatement {
@@ -794,21 +799,76 @@ impl LoweringContext<'_> {
 
         self.enter_block();
         let pattern = self.lower_pattern(pattern)?;
+        // This is gnarly... So basically what happens here is:
+        // Destructure the return value from the `:next()` call into the new pattern
+        // `(NEW_ITERATOR_VAR, Some(PATTERN))`, both to capture the return iterator 
+        // from next, and destructure the item that is yielded
         let good_pattern = LPattern {
             source: None,
             span,
             ty: self.fresh_infer_ty(),
-            data: LPatternData::EnumVariantPattern(
-                option_enum.into(),
-                vec![self.fresh_infer_ty()],
-                self.ctx.static_name("Some"),
-                vec![pattern],
-            ),
+            data: LPatternData::Tuple(vec![
+                LPattern {
+                    source: None,
+                    span,
+                    ty: self.fresh_infer_ty(),
+                    data: LPatternData::EnumVariantPattern(
+                        option_enum.into(),
+                        vec![self.fresh_infer_ty()],
+                        self.ctx.static_name("Some"),
+                        vec![pattern],
+                    ),
+                }
+                .intern(self.ctx),
+                LPattern {
+                    source: None,
+                    span,
+                    ty: self.fresh_infer_ty(),
+                    data: LPatternData::Variable(new_iterator_var),
+                }
+                .intern(self.ctx),
+            ]),
         }
         .intern(self.ctx);
 
         let label = self.enter_label(label);
-        let good_path = self.lower_expr(t)?;
+        // we need to insert the statement `ITERATOR_VAR = NEW_ITERATOR_VAR;`
+        // before our THEN block, to reassign this returned iterator back into
+        // what we're calling `:next()` on
+        let good_path = LExpression {
+            source,
+            span,
+            data: LExpressionData::Block(
+                vec![LStatement {
+                    source: None,
+                    span,
+                    data: LStatementData::Expression(
+                        LExpression {
+                            source,
+                            span,
+                            data: LExpressionData::Assign(
+                                LExpression {
+                                    source,
+                                    span,
+                                    data: LExpressionData::Variable(iterator_var),
+                                }
+                                .intern(self.ctx),
+                                LExpression {
+                                    source,
+                                    span,
+                                    data: LExpressionData::Variable(new_iterator_var),
+                                }
+                                .intern(self.ctx),
+                            ),
+                        }
+                        .intern(self.ctx),
+                    ),
+                }
+                .intern(self.ctx)],
+                self.lower_expr(t)?,
+            ),
+        }
+        .intern(self.ctx);
         self.exit_label();
         self.exit_block();
 
