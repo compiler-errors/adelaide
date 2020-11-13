@@ -47,7 +47,7 @@ pub fn read_file<'ctx>(
 
 fn map_io_error(ctx: &dyn AdelaideContext, file_id: Id<AFile>, e: std::io::Error) -> AError {
     let path = file_id.lookup(ctx).path.clone().unwrap();
-    AError::IOError {
+    AError::IOErrorInPath {
         path,
         io_error: format!("{}", e),
     }

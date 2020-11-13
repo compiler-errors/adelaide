@@ -179,6 +179,9 @@ pub trait AdelaideContext: salsa::Database {
     fn enum_variant_constructor(&self, e: Id<PEnum>, v: Id<str>)
         -> AResult<Arc<LConstructorShape>>;
 
+    #[salsa::invoke(crate::lowering::enum_variant_span)]
+    fn enum_variant_span(&self, e: Id<PEnum>, v: Id<str>) -> AResult<Span>;
+
     #[salsa::invoke(crate::lowering::trait_shape)]
     fn trait_shape(&self, key: Id<PTrait>) -> AResult<Arc<LTraitShape>>;
 

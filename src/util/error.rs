@@ -23,7 +23,14 @@ pub enum AError {
 
     #[message = "IO error while reading {path}"]
     #[note = "{io_error}"]
-    IOError { path: PathBuf, io_error: String },
+    IOErrorInPath { path: PathBuf, io_error: String },
+
+    #[message = "IO error"]
+    #[note = "{io_error}"]
+    IOError { io_error: String },
+
+    #[message = "Broken pipe"]
+    BrokenPipe,
 
     #[message = "UTF-8 error while reading {path}"]
     #[note = "{io_error}"]
@@ -82,6 +89,14 @@ pub enum AError {
         use_span: Span,
     },
 
+    #[message = "The {kind} `{name}` is not a module, cannot access item from it"]
+    ItemIsNotAModuleNoUsage {
+        kind: &'static str,
+        name: Id<str>,
+        #[span = "The {kind} is defined here"]
+        def_span: Span,
+    },
+
     #[message = "The {parent_kind} `{parent_name}` is missing {child_kind} `{child_name}`"]
     MissingSubItem {
         parent_kind: &'static str,
@@ -122,6 +137,17 @@ pub enum AError {
         item_name: Id<str>,
         #[span]
         span: Span,
+    },
+
+    #[message = "Missing field `{item_name}` in constructor of {parent_kind} `{parent_name}`"]
+    ExpectedField {
+        parent_kind: &'static str,
+        parent_name: Id<str>,
+        item_name: Id<str>,
+        #[span]
+        def_span: Span,
+        #[span]
+        use_span: Span,
     },
 
     #[message = "No such item `{name}` in `{mod_path}`"]
@@ -241,7 +267,9 @@ pub enum AError {
         enum_name: Id<str>,
         variant_name: Id<str>,
         #[span = "Remove the generics from this usage, or fully qualify the enum"]
-        span: Span,
+        use_span: Span,
+        #[span = "Variant defined here"]
+        def_span: Span,
     },
 
     #[message = "Cannot attach generic types to the {kind} `{name}`"]
@@ -357,6 +385,18 @@ impl From<LUseError> for AError {
                 child_name,
                 use_span,
             },
+        }
+    }
+}
+
+impl From<std::io::Error> for AError {
+    fn from(e: std::io::Error) -> Self {
+        if e.kind() == std::io::ErrorKind::BrokenPipe {
+            AError::BrokenPipe
+        } else {
+            AError::IOError {
+                io_error: format!("{}", e),
+            }
         }
     }
 }

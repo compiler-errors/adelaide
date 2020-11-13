@@ -24,7 +24,7 @@ fn todo<T>() -> T = {
   panic("TODO")
 }.
 
-fn commalipses<T>() -> T = {
+fn unimplemented<T>() -> T = {
   panic("TODO: implement commalipses")
 }.
 

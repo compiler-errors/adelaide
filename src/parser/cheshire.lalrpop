@@ -24,6 +24,7 @@ extern {
         "::" => Token::ColonColon,
         ";" => Token::SemiColon,
         ":<" => Token::ColonLt,
+        "@" => Token::AtSymbol,
         "{" => Token::LBrace,
         "}" => Token::RBrace,
         "[" => Token::LSqBracket,
@@ -691,7 +692,7 @@ NamedExpressionField: (Span, Id<str>, Id<PExpression>) = {
 };
 
 MaybeLabel: Option<Id<str>> = {
-    ":" <Identifier> => Some(<>),
+    <Identifier> "@" => Some(<>),
     () => None,
 };
 

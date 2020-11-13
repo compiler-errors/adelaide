@@ -9,8 +9,7 @@ use crate::{
 
 use super::{
     fresh_name, LConstructorShape, LEnum, LFunction, LGlobal, LObject, LPattern, LPatternData,
-    LScopeItem, LTraitType, LType, LVariable, LVariableContext,
-    LoweringContext,
+    LScopeItem, LTraitType, LType, LVariable, LVariableContext, LoweringContext,
 };
 
 #[derive(Debug, Hash, Eq, PartialEq, Lookup, PrettyPrint)]
@@ -87,6 +86,7 @@ impl LoweringContext<'_> {
 
         let data = match data {
             PExpressionData::Unimplemented =>
+            // Lower into the `std::unimplemented::<T>()` fn call
                 if let LScopeItem::Function(unimplemented) = self.lookup_std_item("unimplemented") {
                     LExpressionData::Call(unimplemented.into(), vec![self.fresh_infer_ty()], vec![])
                 } else {
@@ -107,7 +107,7 @@ impl LoweringContext<'_> {
 
                     LExpressionData::GlobalFunction(f.into(), generics)
                 },
-                (span, LScopeItem::Function(f), &[(_, mem), ..]) => {
+                (_, LScopeItem::Function(f), &[(span, mem), ..]) => {
                     let info = f.lookup(self.ctx);
                     return Err(AError::CannotAccessMembers {
                         kind: "function",
@@ -363,16 +363,31 @@ impl LoweringContext<'_> {
             },
             PExpressionData::Call(c, ps) => {
                 let c = self.lower_expr(*c)?;
-                let ps = LExpression {
-                    source: e,
-                    span: *span,
-                    data: LExpressionData::Tuple(self.lower_exprs(ps)?),
-                }
-                .intern(self.ctx);
+                let ps = self.lower_exprs(ps)?;
 
-                self.std_static_call(None, "Call", self.fresh_infer_tys(1), "call", vec![], vec![
-                    c, ps,
-                ])
+                if let LExpression {
+                    data: LExpressionData::GlobalFunction(f, g),
+                    ..
+                } = &*c.lookup(self.ctx)
+                {
+                    LExpressionData::Call(f.clone(), g.clone(), ps)
+                } else {
+                    let ps = LExpression {
+                        source: e,
+                        span: *span,
+                        data: LExpressionData::Tuple(ps),
+                    }
+                    .intern(self.ctx);
+
+                    self.std_static_call(
+                        None,
+                        "Call",
+                        self.fresh_infer_tys(1),
+                        "call",
+                        vec![],
+                        vec![c, ps],
+                    )
+                }
             },
             PExpressionData::StaticCall(t, n, g, p) => {
                 let (t, tr) = self.lower_elaborated_ty(*t, true)?;
@@ -436,7 +451,7 @@ impl LoweringContext<'_> {
                 LScopeItem::Object(o) => {
                     let info = o.lookup(self.ctx);
                     if !info.is_structural {
-                        return Err(AError::TriedAllocatingStruct {
+                        return Err(AError::TriedConstructingObject {
                             parent_name: info.name,
                             parent_span: info.span,
                             use_span: *span,
@@ -457,7 +472,8 @@ impl LoweringContext<'_> {
                         return Err(AError::BareEnumGenerics {
                             enum_name: e.lookup(self.ctx).name,
                             variant_name: v,
-                            span: *span,
+                            use_span: *span,
+                            def_span: self.ctx.enum_variant_span(e, v)?,
                         });
                     }
 
@@ -506,7 +522,7 @@ impl LoweringContext<'_> {
                 LScopeItem::Object(o) => {
                     let info = o.lookup(self.ctx);
                     if info.is_structural {
-                        return Err(AError::TriedConstructingObject {
+                        return Err(AError::TriedAllocatingStruct {
                             parent_name: info.name,
                             parent_span: info.span,
                             use_span: *span,
@@ -686,12 +702,18 @@ impl LoweringContext<'_> {
         t: Id<PExpression>,
         e: Id<PExpression>,
     ) -> AResult<LExpressionData> {
-        self.enter_block();
-        let label = self.declare_label(label);
         let condition = self.lower_expr(condition)?;
+
+        let label = self.enter_label(label);
         let t = self.lower_expr(t)?;
-        let e = self.lower_expr(e)?;
-        self.exit_block();
+        self.exit_label();
+
+        let e = LExpression {
+            source,
+            span,
+            data: LExpressionData::Break(label, self.lower_expr(e)?),
+        }
+        .intern(self.ctx);
 
         Ok(LExpressionData::Loop(
             label,
@@ -714,8 +736,6 @@ impl LoweringContext<'_> {
         t: Id<PExpression>,
         e: Id<PExpression>,
     ) -> AResult<LExpressionData> {
-        self.enter_block();
-
         let iterator_var = self.declare_variable(
             fresh_name("for").intern(self.ctx),
             span,
@@ -780,7 +800,10 @@ impl LoweringContext<'_> {
             ),
         }
         .intern(self.ctx);
+
+        let label = self.enter_label(label);
         let good_path = self.lower_expr(t)?;
+        self.exit_label();
         self.exit_block();
 
         let bad_pattern = LPattern {
@@ -790,7 +813,12 @@ impl LoweringContext<'_> {
             data: LPatternData::Underscore,
         }
         .intern(self.ctx);
-        let bad_path = self.lower_expr(e)?;
+        let bad_path = LExpression {
+            source,
+            span,
+            data: LExpressionData::Break(label, self.lower_expr(e)?),
+        }
+        .intern(self.ctx);
 
         let unwrap_match = LExpression {
             source,
@@ -802,16 +830,12 @@ impl LoweringContext<'_> {
         }
         .intern(self.ctx);
 
-        let label = self.declare_label(label);
-
         let unwrap_loop = LExpression {
             source,
             span,
             data: LExpressionData::Loop(label, unwrap_match),
         }
         .intern(self.ctx);
-
-        self.exit_block();
 
         Ok(LExpressionData::Block(
             vec![iterable_to_iterator],
@@ -923,7 +947,10 @@ impl LoweringContext<'_> {
                         given_span: *s2,
                     });
                 },
-            (LConstructorShape::Named(_, expected), PConstructorArguments::Named(_, given)) => {
+            (
+                LConstructorShape::Named(_, expected),
+                PConstructorArguments::Named(constructor_span, given),
+            ) => {
                 let mut seen = hashmap! {};
                 let mut args = vec![];
 
@@ -951,12 +978,12 @@ impl LoweringContext<'_> {
 
                 for (n, (_, is)) in expected {
                     if !seen.contains_key(n) {
-                        return Err(AError::ExpectedSubItem {
+                        return Err(AError::ExpectedField {
                             parent_kind,
                             parent_name,
-                            item_kind: "field",
                             item_name: *n,
-                            span: *is,
+                            def_span: *is,
+                            use_span: *constructor_span,
                         });
                     }
                 }

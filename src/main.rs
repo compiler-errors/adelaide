@@ -9,6 +9,8 @@ extern crate log;
 extern crate lalrpop_util;
 #[macro_use]
 extern crate r#proc;
+#[macro_use]
+extern crate calm_io;
 extern crate self as adelaide;
 
 mod ctx;
@@ -21,9 +23,10 @@ mod util;
 
 use clap::Clap;
 use codespan_reporting::term::termcolor::{ColorChoice, StandardStream};
+
 use ctx::{AdelaideContext, AdelaideDatabase};
 use file::initialize_from_path_arguments;
-use util::{AResult, IntoDiagnostic, Pretty};
+use util::{AError, AResult, IntoDiagnostic, Pretty};
 
 #[derive(Clap)]
 #[clap()]
@@ -59,18 +62,23 @@ impl std::str::FromStr for Mode {
 fn main() {
     let mut ctx = AdelaideDatabase::default();
 
-    if let Err(err) = try_main(&mut ctx) {
-        let writer = StandardStream::stderr(ColorChoice::Always);
-        let config = codespan_reporting::term::Config::default();
+    std::process::exit(match try_main(&mut ctx) {
+        Err(AError::BrokenPipe) | Ok(()) => 0,
+        Err(err) => {
+            let writer = StandardStream::stderr(ColorChoice::Always);
+            let config = codespan_reporting::term::Config::default();
 
-        codespan_reporting::term::emit(
-            &mut writer.lock(),
-            &config,
-            &ctx,
-            &err.into_diagnostic(&ctx),
-        )
-        .unwrap();
-    }
+            codespan_reporting::term::emit(
+                &mut writer.lock(),
+                &config,
+                &ctx,
+                &err.into_diagnostic(&ctx),
+            )
+            .unwrap();
+
+            -1
+        },
+    });
 }
 
 fn try_main(ctx: &mut AdelaideDatabase) -> AResult<()> {
@@ -89,17 +97,17 @@ fn try_main(ctx: &mut AdelaideDatabase) -> AResult<()> {
     let root = ctx.mod_tree_root();
 
     match mode {
-        Mode::Noop => println!("{:#?}", Pretty(root, ctx)),
+        Mode::Noop => stdoutln!("{:#?}", Pretty(root, ctx))?,
         Mode::Lex => {
             ctx.lex_mod(root)?;
         },
         Mode::Parse => {
             let m = ctx.parse_root()?;
-            println!("{:#?}", Pretty(m, ctx))
+            stdoutln!("{:#?}", Pretty(m, ctx))?
         },
         Mode::Check => {
             let l = ctx.lower_root()?;
-            println!("{:#?}", Pretty(l, ctx))
+            stdoutln!("{:#?}", Pretty(l, ctx))?
         },
     }
 

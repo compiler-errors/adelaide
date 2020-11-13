@@ -383,6 +383,7 @@ pub fn local_mod_items(
                     *name,
                     span,
                     item.clone().into(),
+                    false,
                 )?;
             },
         }
@@ -405,6 +406,7 @@ pub fn mod_items(
         &mut visited,
         ctx,
         LUseItem::Module(module),
+        false,
     )?;
 
     mod_items_deep(
@@ -413,6 +415,7 @@ pub fn mod_items(
         &mut visited,
         ctx,
         LUseItem::Module(ctx.parse_root()?),
+        true,
     )?;
 
     mod_items_deep(
@@ -421,6 +424,7 @@ pub fn mod_items(
         &mut visited,
         ctx,
         LUseItem::Module(ctx.parse_std()?),
+        true,
     )?;
 
     Ok(Arc::new(items))
@@ -432,6 +436,7 @@ fn mod_items_deep(
     visited: &mut HashSet<Id<PModule>>,
     ctx: &dyn AdelaideContext,
     item: LUseItem,
+    allow_shadow: bool,
 ) -> AResult<()> {
     let parse_root = ctx.parse_root()?;
 
@@ -454,7 +459,15 @@ fn mod_items_deep(
                     } => {
                         let base = base.unwrap_or(parse_root);
                         let item = ctx.lookup_item_early(base, path.clone())?;
-                        insert_late_item(items, blame_spans, ctx, *name, *span, item.into())?;
+                        insert_late_item(
+                            items,
+                            blame_spans,
+                            ctx,
+                            *name,
+                            *span,
+                            item.into(),
+                            allow_shadow,
+                        )?;
                     },
                     item => {
                         let (_, _, span) = i.info(ctx);
@@ -465,6 +478,7 @@ fn mod_items_deep(
                             *name,
                             span,
                             item.clone().into(),
+                            allow_shadow,
                         )?;
                     },
                 }
@@ -472,11 +486,18 @@ fn mod_items_deep(
                 for (relative, path, _) in &info.full_imports {
                     let base = relative.unwrap_or(parse_root);
                     let item = ctx.lookup_item_early(base, path.clone())?;
-                    mod_items_deep(items, blame_spans, visited, ctx, item)?;
+                    mod_items_deep(items, blame_spans, visited, ctx, item, allow_shadow)?;
                 }
             }
         },
-        _ => todo!(),
+        i => {
+            let (kind, name, def_span) = i.info(ctx);
+            return Err(AError::ItemIsNotAModuleNoUsage {
+                kind,
+                name,
+                def_span,
+            });
+        },
     }
 
     Ok(())
@@ -489,18 +510,25 @@ fn insert_late_item(
     name: Id<str>,
     span: Span,
     item: LScopeItem,
+    allow_shadow: bool,
 ) -> AResult<()> {
-    if let Some(_) = blame_spans.insert(name, span) {
+    if let Some(old) = blame_spans.insert(name, span) {
         let (what, _, _) = item.info(ctx);
         let (what2, _, span2) = items.get(&name).unwrap().info(ctx);
 
-        return Err(AError::DuplicatedItem {
-            what,
-            span,
-            what2,
-            span2,
-            name,
-        });
+        if allow_shadow {
+            // If redefinition is ok, then put that old span back...
+            blame_spans.insert(name, old);
+            return Ok(());
+        } else {
+            return Err(AError::DuplicatedItem {
+                what,
+                span,
+                what2,
+                span2,
+                name,
+            });
+        }
     }
 
     items.insert(name, item);

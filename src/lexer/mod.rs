@@ -18,10 +18,10 @@ pub fn lex_mod(ctx: &dyn AdelaideContext, file_id: Id<AFile>) -> AResult<()> {
     if file_id != ctx.mod_tree_root() {
         let file = file_id.lookup(ctx);
 
-        println!(
+        stdoutln!(
             "Reading module {}",
             itertools::join(file.mod_path.iter(), ":")
-        );
+        )?;
 
         let raw_mod = ctx.read_file(file_id)?;
         let lexer = Lexer::new(ctx, file_id, &raw_mod.contents);
@@ -30,7 +30,7 @@ pub fn lex_mod(ctx: &dyn AdelaideContext, file_id: Id<AFile>) -> AResult<()> {
             print!("{}  ", tok?.1);
         }
 
-        println!();
+        stdoutln!()?;
     }
 
     for c in ctx.literal_module_children(file_id) {
@@ -252,6 +252,10 @@ impl<'input> Lexer<'input> {
                 ';' => {
                     self.bump(1);
                     Ok(Token::SemiColon)
+                },
+                '@' => {
+                    self.bump(1);
+                    Ok(Token::AtSymbol)
                 },
                 '{' => {
                     self.bump(1);

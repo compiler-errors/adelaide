@@ -15,6 +15,7 @@ pub enum Token {
     ColonColon,  //    ::
     SemiColon,   //    ;
     ColonLt,     //    :<
+    AtSymbol,    //    @
     LBrace,      //    {
     RBrace,      //    }
     LSqBracket,  //    [
@@ -119,6 +120,7 @@ impl Display for Token {
             Token::ColonColon => write!(f, "\"::\""),
             Token::ColonLt => write!(f, "\":<\""),
             Token::SemiColon => write!(f, "\";\""),
+            Token::AtSymbol => write!(f, "\"@\""),
             Token::LBrace => write!(f, "\"{{\""),
             Token::RBrace => write!(f, "\"}}\""),
             Token::LSqBracket => write!(f, "\"[\""),

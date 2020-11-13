@@ -1,0 +1,5 @@
+// fail
+
+fn main() = {
+    continue.
+}.

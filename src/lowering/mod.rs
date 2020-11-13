@@ -127,34 +127,6 @@ impl<'ctx> LoweringContext<'ctx> {
         })
     }
 
-    fn enter_context(&mut self, return_allowed: bool, await_allowed: bool) {
-        self.scopes
-            .push(FunctionScope::new(return_allowed, await_allowed));
-        self.enter_block();
-    }
-
-    fn exit_context(&mut self) -> LVariableContext {
-        self.exit_block();
-        self.scopes.pop().unwrap().vcx
-    }
-
-    fn enter_block(&mut self) {
-        self.scopes
-            .last_mut()
-            .unwrap()
-            .variable_scopes
-            .push(hashmap! {})
-    }
-
-    fn exit_block(&mut self) {
-        self.scopes
-            .last_mut()
-            .unwrap()
-            .variable_scopes
-            .pop()
-            .unwrap();
-    }
-
     fn lookup_std_item(&self, name: &'static str) -> LScopeItem {
         // We expect none of these results to be an error, so just unwrap them.
         if let Some(i) = self
@@ -217,7 +189,7 @@ impl<'ctx> LoweringContext<'ctx> {
                     }
                 },
                 item => {
-                    return Ok((span, item, &path[i + 1..]));
+                    return Ok((span, item, &path[i..]));
                 },
             }
         }
@@ -825,7 +797,41 @@ impl<'ctx> LoweringContext<'ctx> {
         Ok(generic)
     }
 
-    fn declare_label(&mut self, label: Option<Id<str>>) -> usize {
+    /// Enter a top-level item scope. If `return_allowed` is false, then we will
+    /// fail if we try to lower the "return" operator. If `await_allowed` is
+    /// unset, then we will fail if we try to lower the `:await` operator.
+    fn enter_context(&mut self, return_allowed: bool, await_allowed: bool) {
+        self.scopes
+            .push(FunctionScope::new(return_allowed, await_allowed));
+        self.enter_block();
+    }
+
+    /// Exit a top-level item scope, returning the variable context that was
+    /// processed in this scope.
+    fn exit_context(&mut self) -> LVariableContext {
+        self.exit_block();
+        self.scopes.pop().unwrap().vcx
+    }
+
+    fn enter_block(&mut self) {
+        self.scopes
+            .last_mut()
+            .unwrap()
+            .variable_scopes
+            .push(hashmap! {})
+    }
+
+    fn exit_block(&mut self) {
+        self.scopes
+            .last_mut()
+            .unwrap()
+            .variable_scopes
+            .pop()
+            .unwrap();
+    }
+
+    /// Declare a (possibly unnamed label) and give it a unique loop id
+    fn enter_label(&mut self, label: Option<Id<str>>) -> usize {
         let label = label.unwrap_or_else(|| fresh_name("LABEL").intern(self.ctx));
         let id = fresh_id();
 
@@ -837,6 +843,14 @@ impl<'ctx> LoweringContext<'ctx> {
         id
     }
 
+    /// Pop a label from the scope, meaning it cannot be referenced anymore
+    fn exit_label(&mut self) {
+        let _ = self.scopes.last_mut().unwrap().label_scopes.pop().unwrap();
+    }
+
+    /// Look up a label, returning its unique loop id. If the label is `None`,
+    /// then this function will return the last label, so (e.g.) a "break"
+    /// breaks the nearest enclosing loop.
     fn lookup_label(&mut self, s: Span, l: Option<Id<str>>) -> AResult<usize> {
         for (n, i) in self.scopes.last_mut().unwrap().label_scopes.iter().rev() {
             if l.map_or(true, |l| l == *n) {
@@ -851,6 +865,9 @@ impl<'ctx> LoweringContext<'ctx> {
         }
     }
 
+    /// Checks that the arity of the `given` generics is the same as the arity
+    /// of the `expected`. If infers are allowed and zero generics are provided,
+    /// then `expected` number of infers are returned instead.
     fn check_generics_parity(
         &self,
         given: Vec<Id<LType>>,
@@ -874,12 +891,14 @@ impl<'ctx> LoweringContext<'ctx> {
         }
     }
 
+    /// Return the Bound enum variant of the given `kind`, with the given
+    /// parameters (for use in range operator desugaring)
     fn get_range_bound(
         &self,
         span: Span,
         source: Id<PExpression>,
         kind: &'static str,
-        es: Vec<Id<LExpression>>,
+        parameters: Vec<Id<LExpression>>,
     ) -> Id<LExpression> {
         if let LScopeItem::Enum(bound) = self.lookup_std_item("Bound") {
             LExpression {
@@ -889,7 +908,7 @@ impl<'ctx> LoweringContext<'ctx> {
                     bound.into(),
                     self.fresh_infer_tys(1),
                     self.ctx.static_name(kind),
-                    es.into_iter().enumerate().collect(),
+                    parameters.into_iter().enumerate().collect(),
                 ),
             }
             .intern(self.ctx)
@@ -1378,6 +1397,24 @@ pub fn enum_variant_constructor(
             };
 
             return Ok(Arc::new(data));
+        }
+    }
+
+    Err(AError::MissingSubItemNoUsage {
+        parent_kind: "enum",
+        parent_name: info.name,
+        parent_span: info.span,
+        child_kind: "variant",
+        child_name: v,
+    })
+}
+
+pub fn enum_variant_span(ctx: &dyn AdelaideContext, e: Id<PEnum>, v: Id<str>) -> AResult<Span> {
+    let info = e.lookup(ctx);
+
+    for (span, variant, _) in &info.variants {
+        if *variant == v {
+            return Ok(*span);
         }
     }
 

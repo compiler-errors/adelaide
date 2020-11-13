@@ -62,7 +62,8 @@ impl LoweringContext<'_> {
                         return Err(AError::BareEnumGenerics {
                             enum_name: e.lookup(self.ctx).name,
                             variant_name: v,
-                            span: *span,
+                            use_span: *span,
+                            def_span: self.ctx.enum_variant_span(e, v)?,
                         });
                     }
 
