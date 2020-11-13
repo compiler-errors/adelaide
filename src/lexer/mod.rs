@@ -638,6 +638,7 @@ impl<'input> Lexer<'input> {
             "let" => Token::Let,
             "if" => Token::If,
             "else" => Token::Else,
+            "loop" => Token::Loop,
             "while" => Token::While,
             "for" => Token::For,
             "in" => Token::In,

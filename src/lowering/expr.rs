@@ -429,6 +429,12 @@ impl LoweringContext<'_> {
                         self.lower_expr(*e)?,
                     ),
                 ]),
+            PExpressionData::Loop(l, e) => {
+                let l = self.enter_label(*l);
+                let e = self.lower_expr(*e)?;
+                self.exit_label();
+                LExpressionData::Loop(l, e)
+            },
             PExpressionData::While(l, p, t, els) =>
                 self.lower_expr_while(e, *span, *l, *p, *t, *els)?,
             PExpressionData::For(l, p, es, t, els) =>

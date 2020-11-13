@@ -651,6 +651,7 @@ pub enum PExpressionData {
         Id<PExpression>,
         Id<PExpression>,
     ),
+    Loop(Option<Id<str>>, Id<PExpression>),
     While(
         Option<Id<str>>,
         Id<PExpression>,
@@ -841,6 +842,13 @@ impl PExpression {
         PExpression {
             span,
             data: PExpressionData::IfLet(p, c, t, e),
+        }
+    }
+
+    pub fn plain_loop(span: Span, label: Option<Id<str>>, e: Id<PExpression>) -> PExpression {
+        PExpression {
+            span,
+            data: PExpressionData::Loop(label, e),
         }
     }
 

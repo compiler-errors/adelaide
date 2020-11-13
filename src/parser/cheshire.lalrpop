@@ -67,6 +67,7 @@ extern {
         "as" => Token::As,
         "if" => Token::If,
         "else" => Token::Else,
+        "loop" => Token::Loop,
         "while" => Token::While,
         "break" => Token::Break,
         "continue" => Token::Continue,
@@ -602,6 +603,8 @@ CallableExpression<Kind>: Id<PExpression> = {
 UndottableExpression: Id<PExpression> = {
     <Block>,
     <IfStatement>,
+    <l:@L> <a:MaybeLabel> "loop" <b:Block> <h:@R> =>
+        PExpression::plain_loop(Span(file, l, h), a, b).intern(ctx),
     <l:@L> <a:MaybeLabel> "while" <c:PreblockExpression> <b:Block> <e:MaybeElseBlock> <h:@R> =>
         PExpression::while_loop(Span(file, l, h), a, c, b, e).intern(ctx),
     <l:@L> <a:MaybeLabel> "for" <p:Pattern> "in" <c:PreblockExpression> <b:Block> <e:MaybeElseBlock> <h:@R> =>
