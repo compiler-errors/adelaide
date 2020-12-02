@@ -28,10 +28,8 @@ impl<K, V> Self for HashMap<K, V> where K: Equals<K> + Hash {
     let hash = key:hash().
 
     for (maybe_hash, maybe_key, maybe_value) in self:bucket_from_hash(hash):entries {
-      if hash == maybe_hash {
-        if key == maybe_key {
-          return Some(maybe_value).
-        }
+      if hash == maybe_hash &? key == maybe_key {
+        return Some(maybe_value).
       }
     }
 

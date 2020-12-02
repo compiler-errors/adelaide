@@ -184,6 +184,26 @@ pub enum AError {
         span: Span,
     },
 
+    #[message = "Illegal associated type"]
+    IllegalAssoc {
+        #[span]
+        span: Span,
+    },
+
+    #[message = "Illegal `Self` type"]
+    IllegalSelf {
+        #[span]
+        span: Span,
+    },
+
+    // TODO: Make this message better, lol
+    #[message = "Impl is an orphan, must be declared in either the trait's module or the type's \
+                 module"]
+    Orphan {
+        #[span]
+        span: Span,
+    },
+
     #[message = "The `return` operator is not allowed outside of a function, closure, or async \
                  block"]
     IllegalReturn {
@@ -278,7 +298,7 @@ pub enum AError {
         name: Id<str>,
         #[span = "Remove the generics from this usage"]
         use_span: Span,
-        #[span = "Variable defined here"]
+        #[span = "{kind} defined here"]
         def_span: Span,
     },
 
@@ -308,17 +328,6 @@ pub enum AError {
         variant: Id<str>,
         #[span]
         use_span: Span,
-    },
-
-    #[message = "The {kind} `{name}` has no members"]
-    CannotAccessMembers {
-        kind: &'static str,
-        name: Id<str>,
-        mem: Id<str>,
-        #[span = "Tried to access member `{mem}` here"]
-        use_span: Span,
-        #[span]
-        def_span: Span,
     },
 
     #[message = "The {kind} `{name}` cannot be treated as an expression"]
@@ -352,6 +361,21 @@ pub enum AError {
         #[span = "Given {given_kind} arguments"]
         given_span: Span,
     },
+
+    #[message = "Missing trait bound `{bound}`, dynamic type must be fully elaborated"]
+    MissingTraitBound {
+        trait_name: Id<str>,
+        bound: Id<str>,
+        #[span = "Add `{bound} = <type>` here"]
+        use_span: Span,
+        #[span = "Associated type defined here"]
+        #[span]
+        def_span: Span,
+    },
+}
+
+pub trait IntoDiagnostic {
+    fn into_diagnostic(self, ctx: &dyn AdelaideContext) -> Diagnostic<Id<AFile>>;
 }
 
 impl From<LUseError> for AError {
@@ -399,8 +423,4 @@ impl From<std::io::Error> for AError {
             }
         }
     }
-}
-
-pub trait IntoDiagnostic {
-    fn into_diagnostic(self, ctx: &dyn AdelaideContext) -> Diagnostic<Id<AFile>>;
 }

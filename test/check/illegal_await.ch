@@ -1,3 +1,3 @@
 // fail
 
-let f: Int = 1:await.
+let f: Int = async {1}:await.

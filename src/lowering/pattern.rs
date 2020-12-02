@@ -11,13 +11,13 @@ pub struct LPattern {
     #[plain]
     pub source: Option<Id<PPattern>>,
     pub span: Span,
-    pub ty: Id<LType>,
+    pub ty: Option<Id<LType>>,
     pub data: LPatternData,
 }
 
 #[derive(Debug, Hash, Eq, PartialEq, PrettyPrint)]
 pub enum LPatternData {
-    Underscore,
+    Underscore(Id<LType>),
     Literal(PLiteral),
     Variable(LVariable),
     Tuple(Vec<Id<LPattern>>),
@@ -28,12 +28,22 @@ pub enum LPatternData {
 impl LoweringContext<'_> {
     pub fn lower_pattern(&mut self, p: Id<PPattern>) -> AResult<Id<LPattern>> {
         let PPattern { span, ty, data } = &*p.lookup(self.ctx);
-        let ty = self.lower_ty(*ty, true)?;
+
+        let ty = if let Some(ty) = ty {
+            Some(self.lower_ty(*ty, true, true)?)
+        } else {
+            None
+        };
+
         let data = match data {
-            PPatternData::Underscore => LPatternData::Underscore,
+            PPatternData::Underscore => LPatternData::Underscore(self.fresh_infer_ty(*span)),
             PPatternData::Literal(l) => LPatternData::Literal(*l),
             PPatternData::Identifier(v) => {
-                let v = self.declare_variable(*v, *span, ty);
+                let v = self.declare_variable(
+                    *v,
+                    *span,
+                    ty.unwrap_or_else(|| self.fresh_infer_ty(*span)),
+                );
                 LPatternData::Variable(v)
             },
             PPatternData::Tuple(ps) => LPatternData::Tuple(self.lower_patterns(ps)?),
@@ -48,7 +58,7 @@ impl LoweringContext<'_> {
                         });
                     }
 
-                    let g = self.lower_tys(g, true)?;
+                    let g = self.lower_tys(g, true, true)?;
                     let g =
                         self.check_generics_parity(g, *span, info.generics.len(), info.span, true)?;
 
@@ -67,7 +77,7 @@ impl LoweringContext<'_> {
                         });
                     }
 
-                    let g = self.fresh_infer_tys(e.lookup(self.ctx).generics.len());
+                    let g = self.fresh_infer_tys(e.lookup(self.ctx).generics.len(), *span);
 
                     let s = self.ctx.enum_variant_constructor(e, v)?;
                     let a = self.lower_destructor("enum variant", v, &s, a)?;
@@ -89,7 +99,7 @@ impl LoweringContext<'_> {
                 LScopeItem::Enum(e) => {
                     let info = e.lookup(self.ctx);
 
-                    let g = self.lower_tys(g, true)?;
+                    let g = self.lower_tys(g, true, true)?;
                     let g =
                         self.check_generics_parity(g, *span, info.generics.len(), info.span, true)?;
 
@@ -212,12 +222,14 @@ impl LoweringContext<'_> {
         }
     }
 
-    fn fresh_empty_pattern(&self, span: Span) -> Id<LPattern> {
+    pub fn fresh_empty_pattern(&self, span: Span) -> Id<LPattern> {
+        let ty = self.fresh_infer_ty(span);
+
         LPattern {
             span,
             source: None,
-            ty: self.fresh_infer_ty(),
-            data: LPatternData::Underscore,
+            ty: Some(ty),
+            data: LPatternData::Underscore(ty),
         }
         .intern(self.ctx)
     }

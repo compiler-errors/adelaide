@@ -11,12 +11,12 @@ use crate::{
     lexer::Span,
     lowering::{
         LConstructorShape, LEarlyContext, LEnum, LExpression, LFunction, LGlobal, LImpl, LModule,
-        LObject, LPattern, LScopeItem, LStatement, LTrait, LTraitShape, LTraitType, LType,
-        LUseItem, LUseResult,
+        LObject, LPattern, LScopeItem, LStatement, LTrait, LTraitShape, LTraitType,
+        LTraitTypeWithBindings, LType, LUseItem, LUseResult,
     },
     parser::{
         PEnum, PExpression, PFunction, PGlobal, PImpl, PModule, PObject, PPattern, PStatement,
-        PTrait, PTraitType, PType, PUse,
+        PTrait, PTraitType, PTraitTypeWithBindings, PType, PUse,
     },
     read::{RawFile, RawFileSource},
     util::{AResult, Id, Intern, Opaque},
@@ -34,13 +34,15 @@ pub trait AdelaideContext: salsa::Database {
 
     fn line_start(&self, id: Id<AFile>, idx: usize) -> Option<usize>;
 
-    fn literal_module_children(&self, data: Id<AFile>) -> Vec<Id<AFile>>;
+    fn literal_module_children(&self, data: Id<AFile>) -> Arc<[Id<AFile>]>;
 
     #[salsa::interned]
     fn intern_str(&self, data: Arc<str>) -> Id<str>;
 
     #[salsa::interned]
     fn intern_afile(&self, data: Arc<AFile>) -> Id<AFile>;
+
+    fn static_name(&self, name: &'static str) -> Id<str>;
 
     // ------ LEXER ------ //
 
@@ -57,6 +59,9 @@ pub trait AdelaideContext: salsa::Database {
 
     #[salsa::invoke(crate::parser::parse_std)]
     fn parse_std(&self) -> AResult<Id<PModule>>;
+
+    #[salsa::invoke(crate::parser::parse_lang)]
+    fn parse_lang(&self) -> AResult<Id<PModule>>;
 
     #[salsa::invoke(crate::parser::parse_mod)]
     fn parse_mod(&self, file_id: Id<AFile>) -> AResult<Id<PModule>>;
@@ -89,6 +94,12 @@ pub trait AdelaideContext: salsa::Database {
     fn intern_ptraittype(&self, key: Arc<PTraitType>) -> Id<PTraitType>;
 
     #[salsa::interned]
+    fn intern_ptraittypewithbindings(
+        &self,
+        key: Arc<PTraitTypeWithBindings>,
+    ) -> Id<PTraitTypeWithBindings>;
+
+    #[salsa::interned]
     fn intern_pglobal(&self, key: Arc<PGlobal>) -> Id<PGlobal>;
 
     #[salsa::interned]
@@ -101,6 +112,12 @@ pub trait AdelaideContext: salsa::Database {
     fn intern_ppattern(&self, key: Arc<PPattern>) -> Id<PPattern>;
 
     // ------ LOWERING ------ //
+
+    #[salsa::invoke(crate::lowering::lower_pollstate_item)]
+    fn lower_pollstate_item(&self) -> AResult<Id<LEnum>>;
+
+    #[salsa::invoke(crate::lowering::std_item)]
+    fn std_item(&self, name: &'static str) -> LScopeItem;
 
     #[salsa::invoke(crate::lowering::lower_root)]
     fn lower_root(&self) -> AResult<Id<LModule>>;
@@ -156,6 +173,12 @@ pub trait AdelaideContext: salsa::Database {
     fn intern_ltraittype(&self, key: Arc<LTraitType>) -> Id<LTraitType>;
 
     #[salsa::interned]
+    fn intern_ltraittypewithbindings(
+        &self,
+        key: Arc<LTraitTypeWithBindings>,
+    ) -> Id<LTraitTypeWithBindings>;
+
+    #[salsa::interned]
     fn intern_lglobal(&self, key: Arc<LGlobal>) -> Id<LGlobal>;
 
     #[salsa::interned]
@@ -170,8 +193,6 @@ pub trait AdelaideContext: salsa::Database {
     #[salsa::invoke(crate::lowering::get_bound_names)]
     fn get_bound_names(&self, tr: Id<PTrait>) -> AResult<Arc<HashMap<Id<str>, Span>>>;
 
-    fn static_name(&self, name: &'static str) -> Id<str>;
-
     #[salsa::invoke(crate::lowering::object_constructor)]
     fn object_constructor(&self, e: Id<PObject>) -> AResult<Arc<LConstructorShape>>;
 
@@ -184,10 +205,6 @@ pub trait AdelaideContext: salsa::Database {
 
     #[salsa::invoke(crate::lowering::trait_shape)]
     fn trait_shape(&self, key: Id<PTrait>) -> AResult<Arc<LTraitShape>>;
-
-    // ------ TYPECHECKER ------ //
-
-    // ...
 
     // ------ MONOMORPHIZATION ------ //
 
@@ -218,7 +235,7 @@ fn line_start(ctx: &dyn AdelaideContext, id: Id<AFile>, idx: usize) -> Option<us
     }
 }
 
-fn literal_module_children(ctx: &dyn AdelaideContext, file_id: Id<AFile>) -> Vec<Id<AFile>> {
+fn literal_module_children(ctx: &dyn AdelaideContext, file_id: Id<AFile>) -> Arc<[Id<AFile>]> {
     file_id.lookup(ctx).children.values().cloned().collect()
 }
 
@@ -237,12 +254,21 @@ impl<'ctx> Files<'ctx> for dyn AdelaideContext {
 
     fn name(&'ctx self, id: Self::FileId) -> Option<Self::Name> {
         if id == self.mod_tree_root() {
-            None
+            Some("ROOOOT".to_string())
         } else {
-            id.lookup(self)
+            let x = id
+                .lookup(self)
                 .path
                 .as_ref()
-                .map(|p| p.display().to_string())
+                .map(|p| p.display().to_string());
+
+            debug!(
+                "{:?} = {:?}",
+                id.lookup(self).mod_path,
+                id.lookup(self).path
+            );
+
+            x
         }
     }
 

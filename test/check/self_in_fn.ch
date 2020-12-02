@@ -1,0 +1,4 @@
+// fail
+
+fn foo() -> Self = {
+}.

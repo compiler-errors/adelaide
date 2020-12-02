@@ -8,8 +8,9 @@ use crate::{
 };
 
 use super::{
-    fresh_name, LConstructorShape, LEnum, LFunction, LGlobal, LObject, LPattern, LPatternData,
-    LScopeItem, LTraitType, LType, LVariable, LVariableContext, LoweringContext,
+    fresh_name, ty::LTypeData, LConstructorShape, LEnum, LFunction, LGlobal, LObject, LPattern,
+    LPatternData, LScopeItem, LTraitType, LType, LVariable, LVariableContext, LoopId,
+    LoweringContext,
 };
 
 #[derive(Debug, Hash, Eq, PartialEq, Lookup, PrettyPrint)]
@@ -34,6 +35,7 @@ pub enum LExpressionData {
     ArrayLiteral(Vec<Id<LExpression>>),
     Assign(Id<LExpression>, Id<LExpression>),
     StaticCall(
+        bool,
         Id<LType>,
         Option<Id<LTraitType>>,
         Id<str>,
@@ -43,10 +45,10 @@ pub enum LExpressionData {
     Call(LId<LFunction>, Vec<Id<LType>>, Vec<Id<LExpression>>),
     Or(Id<LExpression>, Id<LExpression>),
     And(Id<LExpression>, Id<LExpression>),
-    Await(Id<LExpression>),
+    PollTrampoline(Id<LExpression>),
     Return(Id<LExpression>),
-    Break(usize, Id<LExpression>),
-    Continue(usize),
+    Break(LoopId, Id<LExpression>),
+    Continue(LoopId),
     StructConstructor(LId<LObject>, Vec<Id<LType>>, Vec<(usize, Id<LExpression>)>),
     ObjectAllocation(LId<LObject>, Vec<Id<LType>>, Vec<(usize, Id<LExpression>)>),
     EnumConstructor(
@@ -62,7 +64,7 @@ pub enum LExpressionData {
         Id<LExpression>,
     ),
     If(Id<LExpression>, Id<LExpression>, Id<LExpression>),
-    Loop(usize, Id<LExpression>),
+    Loop(LoopId, Id<LExpression>, bool),
     Match(Id<LExpression>, Vec<(Id<LPattern>, Id<LExpression>)>),
 }
 
@@ -87,19 +89,23 @@ impl LoweringContext<'_> {
         let data = match data {
             PExpressionData::Unimplemented =>
             // Lower into the `std::unimplemented::<T>()` fn call
-                if let LScopeItem::Function(unimplemented) = self.lookup_std_item("unimplemented") {
-                    LExpressionData::Call(unimplemented.into(), vec![self.fresh_infer_ty()], vec![])
+                if let LScopeItem::Function(unimplemented) = self.ctx.std_item("unimplemented") {
+                    LExpressionData::Call(
+                        unimplemented.into(),
+                        vec![self.fresh_infer_ty(*span)],
+                        vec![],
+                    )
                 } else {
                     unreachable!()
                 },
-            PExpressionData::Identifiers(id, generics) => match self.lookup_path_partial(&id)? {
-                (span, LScopeItem::Function(f), &[]) => {
+            PExpressionData::Identifiers(id, generics) => match self.lookup_path(&id)? {
+                LScopeItem::Function(f) => {
                     let info = f.lookup(self.ctx);
 
-                    let generics = self.lower_tys(generics, true)?;
+                    let generics = self.lower_tys(generics, true, true)?;
                     let generics = self.check_generics_parity(
                         generics,
-                        span,
+                        *span,
                         info.generics.len(),
                         info.span,
                         true,
@@ -107,56 +113,40 @@ impl LoweringContext<'_> {
 
                     LExpressionData::GlobalFunction(f.into(), generics)
                 },
-                (_, LScopeItem::Function(f), &[(span, mem), ..]) => {
-                    let info = f.lookup(self.ctx);
-                    return Err(AError::CannotAccessMembers {
-                        kind: "function",
-                        name: info.name,
-                        mem,
-                        use_span: span,
-                        def_span: info.span,
-                    });
-                },
-                (span, LScopeItem::Variable(v), rest) => {
-                    let data =
-                        self.lower_expr_accesses(span, e, LExpressionData::Variable(v), rest)?;
-
+                LScopeItem::Variable(v) => {
                     if !generics.is_empty() {
                         return Err(AError::DenyGenerics {
                             kind: "variable",
                             name: v.name,
-                            use_span: span,
+                            use_span: *span,
                             def_span: v.span,
                         });
                     }
 
-                    data
+                    LExpressionData::Variable(v)
                 },
-                (span, LScopeItem::Global(g), rest) => {
-                    let data =
-                        self.lower_expr_accesses(span, e, LExpressionData::Global(g.into()), rest)?;
-
+                LScopeItem::Global(g) => {
                     if !generics.is_empty() {
                         let info = g.lookup(self.ctx);
 
                         return Err(AError::DenyGenerics {
                             kind: "global",
                             name: info.name,
-                            use_span: span,
+                            use_span: *span,
                             def_span: info.span,
                         });
                     }
 
-                    data
+                    LExpressionData::Global(g.into())
                 },
-                (span, i, _) => {
-                    let (kind, name, def_span) = i.info(self.ctx);
+                item => {
+                    let (kind, name, def_span) = item.info(self.ctx);
 
                     return Err(AError::NotAnExpression {
                         kind,
                         name,
                         def_span,
-                        use_span: span,
+                        use_span: *span,
                     });
                 },
             },
@@ -188,10 +178,11 @@ impl LoweringContext<'_> {
             PExpressionData::ArrayLiteral(es) =>
                 LExpressionData::ArrayLiteral(self.lower_exprs(es)?),
             PExpressionData::Array(a, n) => {
-                let a = self.lower_ty(*a, true)?;
+                let a = self.lower_ty(*a, true, true)?;
                 let n = self.lower_expr(*n)?;
                 self.std_static_call(
-                    Some(a),
+                    false,
+                    a,
                     "AllocateArray",
                     vec![],
                     "allocate_array",
@@ -204,9 +195,10 @@ impl LoweringContext<'_> {
                 let a = self.lower_expr(*a)?;
                 let b = self.get_range_bound(*span, e, "Unbounded", vec![]);
                 self.std_static_call(
-                    None,
+                    false,
+                    self.fresh_infer_ty(*span),
                     "Range",
-                    self.fresh_infer_tys(1),
+                    self.fresh_infer_tys(1, *span),
                     "range",
                     vec![],
                     vec![a, b],
@@ -217,9 +209,10 @@ impl LoweringContext<'_> {
                 let b = self.lower_expr(*b)?;
                 let b = self.get_range_bound(*span, e, "Inclusive", vec![b]);
                 self.std_static_call(
-                    None,
+                    false,
+                    self.fresh_infer_ty(*span),
                     "Range",
-                    self.fresh_infer_tys(1),
+                    self.fresh_infer_tys(1, *span),
                     "range",
                     vec![],
                     vec![a, b],
@@ -230,9 +223,10 @@ impl LoweringContext<'_> {
                 let b = self.lower_expr(*b)?;
                 let b = self.get_range_bound(*span, e, "Exclusive", vec![b]);
                 self.std_static_call(
-                    None,
+                    false,
+                    self.fresh_infer_ty(*span),
                     "Range",
-                    self.fresh_infer_tys(1),
+                    self.fresh_infer_tys(1, *span),
                     "range",
                     vec![],
                     vec![a, b],
@@ -246,6 +240,7 @@ impl LoweringContext<'_> {
                 let a = self.lower_expr(*a)?;
                 let b = self.lower_expr(*b)?;
 
+                // Map each operator onto its corresponding trait and method
                 let (tr, f) = match op {
                     PBinopKind::Or => ("Or", "or"),
                     PBinopKind::And => ("And", "and"),
@@ -260,24 +255,37 @@ impl LoweringContext<'_> {
                     PBinopKind::Mul => ("Multiply", "mul"),
                     PBinopKind::Div => ("Divide", "div"),
                     PBinopKind::Mod => ("Modulo", "mod"),
+                    // These have been lowered separately
                     PBinopKind::OrCircuit
                     | PBinopKind::AndCircuit
                     | PBinopKind::RangeInclusive
                     | PBinopKind::RangeExclusive => unreachable!(),
                 };
 
-                self.std_static_call(None, tr, self.fresh_infer_tys(1), f, vec![], vec![a, b])
+                self.std_static_call(
+                    true,
+                    self.fresh_infer_ty(*span),
+                    tr,
+                    self.fresh_infer_tys(1, *span),
+                    f,
+                    vec![],
+                    vec![a, b],
+                )
             },
             PExpressionData::Assign(a, b) => match &a.lookup(self.ctx).data {
                 PExpressionData::Index(a, i) => {
+                    // If the LHS of the assign operator is an index operator,
+                    // e.g. `a[i] = b`, then we will desugar this into the
+                    // `DerefAssign` trait specifically
                     let a = self.lower_expr(*a)?;
                     let b = self.lower_expr(*b)?;
                     let i = self.lower_expr(*i)?;
 
                     self.std_static_call(
-                        None,
+                        true,
+                        self.fresh_infer_ty(*span),
                         "DerefAssign",
-                        self.fresh_infer_tys(1),
+                        self.fresh_infer_tys(1, *span),
                         "deref_assign",
                         vec![],
                         vec![a, i, b],
@@ -291,14 +299,34 @@ impl LoweringContext<'_> {
             },
             PExpressionData::Not(e) => {
                 let e = self.lower_expr(*e)?;
-                self.std_static_call(None, "Not", vec![], "not", vec![], vec![e])
+                self.std_static_call(
+                    true,
+                    self.fresh_infer_ty(*span),
+                    "Not",
+                    vec![],
+                    "not",
+                    vec![],
+                    vec![e],
+                )
             },
             PExpressionData::Neg(e) => {
                 let e = self.lower_expr(*e)?;
-                self.std_static_call(None, "Negate", vec![], "negate", vec![], vec![e])
+                self.std_static_call(
+                    true,
+                    self.fresh_infer_ty(*span),
+                    "Negate",
+                    vec![],
+                    "negate",
+                    vec![],
+                    vec![e],
+                )
             },
             PExpressionData::InterpolationBegin(l, s) => {
-                let string = LType::String.intern(self.ctx);
+                let string = LType {
+                    data: LTypeData::String,
+                    span: *span,
+                }
+                .intern(self.ctx);
                 let l = LExpression {
                     source: e,
                     span: *span,
@@ -307,10 +335,14 @@ impl LoweringContext<'_> {
                 .intern(self.ctx);
                 let s = self.lower_expr(*s)?;
 
-                self.std_static_call(Some(string), "Add", vec![string], "add", vec![], vec![l, s])
+                self.std_static_call(true, string, "Add", vec![string], "add", vec![], vec![l, s])
             },
             PExpressionData::InterpolationContinue(a, l, s) => {
-                let string = LType::String.intern(self.ctx);
+                let string = LType {
+                    data: LTypeData::String,
+                    span: *span,
+                }
+                .intern(self.ctx);
                 let l = LExpression {
                     source: e,
                     span: *span,
@@ -321,14 +353,23 @@ impl LoweringContext<'_> {
                 let a = LExpression {
                     source: e,
                     span: *span,
-                    data: self.std_static_call(None, "Into", vec![string], "into", vec![], vec![a]),
+                    data: self.std_static_call(
+                        true,
+                        self.fresh_infer_ty(*span),
+                        "Into",
+                        vec![string],
+                        "into",
+                        vec![],
+                        vec![a],
+                    ),
                 }
                 .intern(self.ctx);
                 let al = LExpression {
                     source: e,
                     span: *span,
                     data: self.std_static_call(
-                        Some(string),
+                        true,
+                        string,
                         "Add",
                         vec![string],
                         "add",
@@ -339,12 +380,16 @@ impl LoweringContext<'_> {
                 .intern(self.ctx);
                 let s = self.lower_expr(*s)?;
 
-                self.std_static_call(Some(string), "Add", vec![string], "add", vec![], vec![
+                self.std_static_call(true, string, "Add", vec![string], "add", vec![], vec![
                     al, s,
                 ])
             },
             PExpressionData::InterpolationEnd(a, l) => {
-                let string = LType::String.intern(self.ctx);
+                let string = LType {
+                    data: LTypeData::String,
+                    span: *span,
+                }
+                .intern(self.ctx);
                 let l = LExpression {
                     source: e,
                     span: *span,
@@ -355,11 +400,19 @@ impl LoweringContext<'_> {
                 let a = LExpression {
                     source: e,
                     span: *span,
-                    data: self.std_static_call(None, "Into", vec![string], "into", vec![], vec![a]),
+                    data: self.std_static_call(
+                        true,
+                        self.fresh_infer_ty(*span),
+                        "Into",
+                        vec![string],
+                        "into",
+                        vec![],
+                        vec![a],
+                    ),
                 }
                 .intern(self.ctx);
 
-                self.std_static_call(Some(string), "Add", vec![string], "add", vec![], vec![a, l])
+                self.std_static_call(true, string, "Add", vec![string], "add", vec![], vec![a, l])
             },
             PExpressionData::Call(c, ps) => {
                 let c = self.lower_expr(*c)?;
@@ -380,33 +433,46 @@ impl LoweringContext<'_> {
                     .intern(self.ctx);
 
                     self.std_static_call(
-                        None,
+                        true,
+                        self.fresh_infer_ty(*span),
                         "Call",
-                        self.fresh_infer_tys(1),
+                        self.fresh_infer_tys(1, *span),
                         "call",
                         vec![],
                         vec![c, ps],
                     )
                 }
             },
-            PExpressionData::StaticCall(t, n, g, p) => {
-                let (t, tr) = self.lower_elaborated_ty(*t, true)?;
-                LExpressionData::StaticCall(
-                    t,
-                    tr,
-                    *n,
-                    self.lower_tys(g, true)?,
-                    self.lower_exprs(p)?,
-                )
+            PExpressionData::StaticCall(t, n, gs, ps) => {
+                let (t, tr) = self.lower_elaborated_ty(*t, true, true)?;
+                let gs = self.lower_tys(gs, true, true)?;
+                let ps = self.lower_exprs(ps)?;
+
+                if let Some(tr) = tr {
+                    let info = tr.lookup(self.ctx).tr.source().lookup(self.ctx);
+                    let gs = self.check_generics_parity(
+                        gs,
+                        *span,
+                        info.generics.len(),
+                        info.span,
+                        true,
+                    )?;
+
+                    LExpressionData::StaticCall(false, t, Some(tr), *n, gs, ps)
+                } else {
+                    LExpressionData::StaticCall(false, t, None, *n, gs, ps)
+                }
             },
             PExpressionData::ObjectCall(e, n, g, p) => {
                 let mut p = self.lower_exprs(&p)?;
                 p.insert(0, self.lower_expr(*e)?);
+
                 LExpressionData::StaticCall(
-                    self.fresh_infer_ty(),
+                    true,
+                    self.fresh_infer_ty(*span),
                     None,
                     *n,
-                    self.lower_tys(g, true)?,
+                    self.lower_tys(g, true, true)?,
                     p,
                 )
             },
@@ -418,22 +484,13 @@ impl LoweringContext<'_> {
             PExpressionData::IfLet(p, v, t, e) =>
                 LExpressionData::Match(self.lower_expr(*v)?, vec![
                     (self.lower_pattern(*p)?, self.lower_expr(*t)?),
-                    (
-                        LPattern {
-                            source: None,
-                            span: *span,
-                            data: LPatternData::Underscore,
-                            ty: self.fresh_infer_ty(),
-                        }
-                        .intern(self.ctx),
-                        self.lower_expr(*e)?,
-                    ),
+                    (self.fresh_empty_pattern(*span), self.lower_expr(*e)?),
                 ]),
             PExpressionData::Loop(l, e) => {
                 let l = self.enter_label(*l);
                 let e = self.lower_expr(*e)?;
-                self.exit_label();
-                LExpressionData::Loop(l, e)
+                let used = self.exit_label();
+                LExpressionData::Loop(l, e, used)
             },
             PExpressionData::While(l, p, t, els) =>
                 self.lower_expr_while(e, *span, *l, *p, *t, *els)?,
@@ -464,7 +521,7 @@ impl LoweringContext<'_> {
                         });
                     }
 
-                    let g = self.lower_tys(g, true)?;
+                    let g = self.lower_tys(g, true, true)?;
                     let g =
                         self.check_generics_parity(g, *span, info.generics.len(), info.span, true)?;
 
@@ -483,7 +540,7 @@ impl LoweringContext<'_> {
                         });
                     }
 
-                    let g = self.fresh_infer_tys(e.lookup(self.ctx).generics.len());
+                    let g = self.fresh_infer_tys(e.lookup(self.ctx).generics.len(), *span);
 
                     let s = self.ctx.enum_variant_constructor(e, v)?;
                     let a = self.lower_constructor("enum variant", v, &s, a)?;
@@ -505,7 +562,7 @@ impl LoweringContext<'_> {
                 LScopeItem::Enum(e) => {
                     let info = e.lookup(self.ctx);
 
-                    let g = self.lower_tys(g, true)?;
+                    let g = self.lower_tys(g, true, true)?;
                     let g =
                         self.check_generics_parity(g, *span, info.generics.len(), info.span, true)?;
 
@@ -535,7 +592,7 @@ impl LoweringContext<'_> {
                         });
                     }
 
-                    let g = self.lower_tys(g, true)?;
+                    let g = self.lower_tys(g, true, true)?;
                     let g =
                         self.check_generics_parity(g, *span, info.generics.len(), info.span, true)?;
 
@@ -562,7 +619,7 @@ impl LoweringContext<'_> {
                     return Err(AError::IllegalReturn { span: *span });
                 },
             PExpressionData::Assert(v) => {
-                if let LScopeItem::Function(assert) = self.lookup_std_item("assert_impl") {
+                if let LScopeItem::Function(assert) = self.ctx.std_item("assert_impl") {
                     LExpressionData::Call(assert.into(), vec![], vec![self.lower_expr(*v)?])
                 } else {
                     unreachable!()
@@ -596,7 +653,7 @@ impl LoweringContext<'_> {
 
                 let ps = self.lower_patterns(ps)?;
                 let e = self.lower_expr(*e)?;
-                let r = self.lower_ty(*r, true)?;
+                let r = self.lower_ty(*r, true, true)?;
 
                 let vcx = self.exit_context();
 
@@ -607,9 +664,10 @@ impl LoweringContext<'_> {
                 let a = self.lower_expr(*a)?;
                 let i = self.lower_expr(*i)?;
                 self.std_static_call(
-                    None,
+                    true,
+                    self.fresh_infer_ty(*span),
                     "Deref",
-                    self.fresh_infer_tys(1),
+                    self.fresh_infer_tys(1, *span),
                     "deref",
                     vec![],
                     vec![a, i],
@@ -631,7 +689,26 @@ impl LoweringContext<'_> {
                     return Err(AError::IllegalAwait { span: *span });
                 }
 
-                LExpressionData::Await(self.lower_expr(*a)?)
+                let a = self.lower_expr(*a)?;
+                let poll_call = LExpression {
+                    source: e,
+                    span: *span,
+                    data: self.std_static_call(
+                        true,
+                        self.fresh_infer_ty(*span),
+                        "Poll",
+                        vec![],
+                        "poll",
+                        vec![],
+                        vec![a],
+                    ),
+                }
+                .intern(self.ctx);
+
+                // Lower `e:await` into `poll_trampoline(<_ as Poll>::poll(e))`
+                // poll_trampoline will do the work of actually unwinding the
+                // thread on an incomplete.
+                LExpressionData::PollTrampoline(poll_call)
             },
         };
 
@@ -643,28 +720,37 @@ impl LoweringContext<'_> {
         .intern(self.ctx))
     }
 
+    /// Lower the provided information into a call which references a static
+    /// method of a trait existing in the standard library.
+    ///
+    /// If `c` is provided, this is the call type (e.g. `<c as Trait>::f()`),
+    /// otherwise, it is left as an infer type.
+    ///
+    /// Trait and function generics are obligatory and must match the expected
+    /// generics, since there is no parity validation in this call.
     fn std_static_call(
         &self,
-        c: Option<Id<LType>>,
+        is_method: bool,
+        call_ty: Id<LType>,
         tr: &'static str,
         tr_generics: Vec<Id<LType>>,
-        f: &'static str,
-        f_generics: Vec<Id<LType>>,
+        fun_name: &'static str,
+        fun_generics: Vec<Id<LType>>,
         params: Vec<Id<LExpression>>,
     ) -> LExpressionData {
-        if let LScopeItem::Trait(tr) = self.lookup_std_item(tr) {
+        if let LScopeItem::Trait(tr) = self.ctx.std_item(tr) {
             LExpressionData::StaticCall(
-                c.unwrap_or_else(|| self.fresh_infer_ty()),
+                is_method,
+                call_ty,
                 Some(
                     LTraitType {
                         tr: tr.into(),
                         generics: tr_generics,
-                        bounds: btreemap! {},
                     }
                     .intern(self.ctx),
                 ),
-                self.ctx.static_name(f),
-                f_generics,
+                self.ctx.static_name(fun_name),
+                fun_generics,
                 params,
             )
         } else {
@@ -674,29 +760,12 @@ impl LoweringContext<'_> {
 
     fn lower_exprs(&mut self, es: &[Id<PExpression>]) -> AResult<Vec<Id<LExpression>>> {
         let mut ret = vec![];
+
         for e in es {
             ret.push(self.lower_expr(*e)?);
         }
+
         Ok(ret)
-    }
-
-    fn lower_expr_accesses(
-        &self,
-        mut span: Span,
-        source: Id<PExpression>,
-        mut data: LExpressionData,
-        accesses: &[(Span, Id<str>)],
-    ) -> AResult<LExpressionData> {
-        for (a_span, a) in accesses {
-            data = LExpressionData::Access(
-                LExpression { source, span, data }.intern(self.ctx),
-                *a_span,
-                *a,
-            );
-            span = span.unite(*a_span);
-        }
-
-        Ok(data)
     }
 
     fn lower_expr_while(
@@ -705,19 +774,19 @@ impl LoweringContext<'_> {
         span: Span,
         label: Option<Id<str>>,
         condition: Id<PExpression>,
-        t: Id<PExpression>,
-        e: Id<PExpression>,
+        then_expr: Id<PExpression>,
+        else_expr: Id<PExpression>,
     ) -> AResult<LExpressionData> {
         let condition = self.lower_expr(condition)?;
 
         let label = self.enter_label(label);
-        let t = self.lower_expr(t)?;
-        self.exit_label();
+        let then_expr = self.lower_expr(then_expr)?;
+        let used = self.exit_label();
 
-        let e = LExpression {
+        let else_expr = LExpression {
             source,
             span,
-            data: LExpressionData::Break(label, self.lower_expr(e)?),
+            data: LExpressionData::Break(label, self.lower_expr(else_expr)?),
         }
         .intern(self.ctx);
 
@@ -726,9 +795,10 @@ impl LoweringContext<'_> {
             LExpression {
                 source,
                 span,
-                data: LExpressionData::If(condition, t, e),
+                data: LExpressionData::If(condition, then_expr, else_expr),
             }
             .intern(self.ctx),
+            used,
         ))
     }
 
@@ -739,21 +809,24 @@ impl LoweringContext<'_> {
         label: Option<Id<str>>,
         pattern: Id<PPattern>,
         iterable: Id<PExpression>,
-        t: Id<PExpression>,
-        e: Id<PExpression>,
+        then_expr: Id<PExpression>,
+        else_expr: Id<PExpression>,
     ) -> AResult<LExpressionData> {
+        // It's fine, we can leak these because they're unreferenceable
         let iterator_var = self.declare_variable(
             fresh_name("for").intern(self.ctx),
             span,
-            self.fresh_infer_ty(),
+            self.fresh_infer_ty(span),
         );
         let new_iterator_var = self.declare_variable(
             fresh_name("for").intern(self.ctx),
             span,
-            self.fresh_infer_ty(),
+            self.fresh_infer_ty(span),
         );
 
         let iterable = self.lower_expr(iterable)?;
+        // lower the `ITERABLE` to
+        // `let ITERATOR_VAR = <_ as Iterable>::iterator(ITERABLE).`
         let iterable_to_iterator = LStatement {
             source: None,
             span,
@@ -761,16 +834,22 @@ impl LoweringContext<'_> {
                 LPattern {
                     source: None,
                     span,
-                    ty: self.fresh_infer_ty(),
+                    ty: Some(self.fresh_infer_ty(span)),
                     data: LPatternData::Variable(iterator_var),
                 }
                 .intern(self.ctx),
                 LExpression {
                     source,
                     span,
-                    data: self.std_static_call(None, "Iterable", vec![], "iterator", vec![], vec![
-                        iterable,
-                    ]),
+                    data: self.std_static_call(
+                        true,
+                        self.fresh_infer_ty(span),
+                        "Iterable",
+                        vec![],
+                        "iterator",
+                        vec![],
+                        vec![iterable],
+                    ),
                 }
                 .intern(self.ctx),
             ),
@@ -780,18 +859,24 @@ impl LoweringContext<'_> {
         let next_call = LExpression {
             source,
             span,
-            data: self.std_static_call(None, "Iterator", vec![], "next", vec![], vec![
-                LExpression {
+            data: self.std_static_call(
+                true,
+                self.fresh_infer_ty(span),
+                "Iterator",
+                vec![],
+                "next",
+                vec![],
+                vec![LExpression {
                     source,
                     span,
                     data: LExpressionData::Variable(iterator_var),
                 }
-                .intern(self.ctx),
-            ]),
+                .intern(self.ctx)],
+            ),
         }
         .intern(self.ctx);
 
-        let option_enum = if let LScopeItem::Enum(option_enum) = self.lookup_std_item("Option") {
+        let option_enum = if let LScopeItem::Enum(option_enum) = self.ctx.std_item("Option") {
             option_enum
         } else {
             unreachable!()
@@ -801,20 +886,20 @@ impl LoweringContext<'_> {
         let pattern = self.lower_pattern(pattern)?;
         // This is gnarly... So basically what happens here is:
         // Destructure the return value from the `:next()` call into the new pattern
-        // `(NEW_ITERATOR_VAR, Some(PATTERN))`, both to capture the return iterator 
+        // `(NEW_ITERATOR_VAR, Some(PATTERN))`, both to capture the return iterator
         // from next, and destructure the item that is yielded
         let good_pattern = LPattern {
             source: None,
             span,
-            ty: self.fresh_infer_ty(),
+            ty: Some(self.fresh_infer_ty(span)),
             data: LPatternData::Tuple(vec![
                 LPattern {
                     source: None,
                     span,
-                    ty: self.fresh_infer_ty(),
+                    ty: Some(self.fresh_infer_ty(span)),
                     data: LPatternData::EnumVariantPattern(
                         option_enum.into(),
-                        vec![self.fresh_infer_ty()],
+                        vec![self.fresh_infer_ty(span)],
                         self.ctx.static_name("Some"),
                         vec![pattern],
                     ),
@@ -823,7 +908,7 @@ impl LoweringContext<'_> {
                 LPattern {
                     source: None,
                     span,
-                    ty: self.fresh_infer_ty(),
+                    ty: Some(self.fresh_infer_ty(span)),
                     data: LPatternData::Variable(new_iterator_var),
                 }
                 .intern(self.ctx),
@@ -865,24 +950,18 @@ impl LoweringContext<'_> {
                     ),
                 }
                 .intern(self.ctx)],
-                self.lower_expr(t)?,
+                self.lower_expr(then_expr)?,
             ),
         }
         .intern(self.ctx);
-        self.exit_label();
+        let used = self.exit_label();
         self.exit_block();
 
-        let bad_pattern = LPattern {
-            source: None,
-            span,
-            ty: self.fresh_infer_ty(),
-            data: LPatternData::Underscore,
-        }
-        .intern(self.ctx);
+        let bad_pattern = self.fresh_empty_pattern(span);
         let bad_path = LExpression {
             source,
             span,
-            data: LExpressionData::Break(label, self.lower_expr(e)?),
+            data: LExpressionData::Break(label, self.lower_expr(else_expr)?),
         }
         .intern(self.ctx);
 
@@ -899,7 +978,7 @@ impl LoweringContext<'_> {
         let unwrap_loop = LExpression {
             source,
             span,
-            data: LExpressionData::Loop(label, unwrap_match),
+            data: LExpressionData::Loop(label, unwrap_match, used),
         }
         .intern(self.ctx);
 
@@ -917,10 +996,10 @@ impl LoweringContext<'_> {
     ) -> AResult<LExpressionData> {
         let throwable = self.lower_expr(throwable)?;
 
-        let good_ty = self.fresh_infer_ty();
-        let bad_ty = self.fresh_infer_ty();
+        let good_ty = self.fresh_infer_ty(span);
+        let bad_ty = self.fresh_infer_ty(span);
 
-        let result_enum = if let LScopeItem::Enum(result_enum) = self.lookup_std_item("Result") {
+        let result_enum = if let LScopeItem::Enum(result_enum) = self.ctx.std_item("Result") {
             result_enum
         } else {
             unreachable!()
@@ -931,25 +1010,25 @@ impl LoweringContext<'_> {
         let good_var = self.declare_variable(
             fresh_name("try").intern(self.ctx),
             span,
-            self.fresh_infer_ty(),
+            self.fresh_infer_ty(span),
         );
         let bad_var = self.declare_variable(
             fresh_name("try").intern(self.ctx),
             span,
-            self.fresh_infer_ty(),
+            self.fresh_infer_ty(span),
         );
 
         let good_name = LPattern {
             source: None,
             span,
-            ty: self.fresh_infer_ty(),
+            ty: Some(self.fresh_infer_ty(span)),
             data: LPatternData::Variable(good_var),
         }
         .intern(self.ctx);
         let good_pattern = LPattern {
             source: None,
             span,
-            ty: self.fresh_infer_ty(),
+            ty: Some(self.fresh_infer_ty(span)),
             data: LPatternData::EnumVariantPattern(
                 result_enum.into(),
                 vec![good_ty, bad_ty],
@@ -968,7 +1047,7 @@ impl LoweringContext<'_> {
         let bad_pattern = LPattern {
             source: None,
             span,
-            ty: self.fresh_infer_ty(),
+            ty: Some(self.fresh_infer_ty(span)),
             data: LPatternData::Variable(good_var),
         }
         .intern(self.ctx);
@@ -1097,5 +1176,31 @@ impl LoweringContext<'_> {
             ret.push(self.lower_statement(*s)?);
         }
         Ok(ret)
+    }
+
+    /// Return the Bound enum variant of the given `kind`, with the given
+    /// parameters (for use in range operator desugaring)
+    fn get_range_bound(
+        &self,
+        span: Span,
+        source: Id<PExpression>,
+        kind: &'static str,
+        parameters: Vec<Id<LExpression>>,
+    ) -> Id<LExpression> {
+        if let LScopeItem::Enum(bound) = self.ctx.std_item("Bound") {
+            LExpression {
+                source,
+                span,
+                data: LExpressionData::EnumConstructor(
+                    bound.into(),
+                    self.fresh_infer_tys(1, span),
+                    self.ctx.static_name(kind),
+                    parameters.into_iter().enumerate().collect(),
+                ),
+            }
+            .intern(self.ctx)
+        } else {
+            unreachable!()
+        }
     }
 }

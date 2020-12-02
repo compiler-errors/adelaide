@@ -33,8 +33,8 @@ pub fn lex_mod(ctx: &dyn AdelaideContext, file_id: Id<AFile>) -> AResult<()> {
         stdoutln!()?;
     }
 
-    for c in ctx.literal_module_children(file_id) {
-        ctx.lex_mod(c)?;
+    for c in &*ctx.literal_module_children(file_id) {
+        ctx.lex_mod(*c)?;
     }
 
     Ok(())

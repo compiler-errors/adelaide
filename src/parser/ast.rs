@@ -161,7 +161,7 @@ pub struct PFunction {
     pub generics: Vec<(Span, Id<str>)>,
     pub parameters: Vec<(Span, Id<str>, Id<PType>)>,
     pub return_ty: Id<PType>,
-    pub restrictions: Vec<(Id<PType>, Vec<Id<PTraitType>>)>,
+    pub restrictions: Vec<(Id<PType>, Vec<Id<PTraitTypeWithBindings>>)>,
     pub body: Option<Id<PExpression>>,
 }
 
@@ -173,7 +173,7 @@ impl PFunction {
         generics: Vec<(Span, Id<str>)>,
         parameters: Vec<(Span, Id<str>, Id<PType>)>,
         return_ty: Id<PType>,
-        restrictions: Vec<(Id<PType>, Vec<Id<PTraitType>>)>,
+        restrictions: Vec<(Id<PType>, Vec<Id<PTraitTypeWithBindings>>)>,
         body: Option<Id<PExpression>>,
     ) -> PFunction {
         PFunction {
@@ -196,7 +196,7 @@ pub struct PObject {
     pub span: Span,
     pub name: Id<str>,
     pub generics: Vec<(Span, Id<str>)>,
-    pub restrictions: Vec<(Id<PType>, Vec<Id<PTraitType>>)>,
+    pub restrictions: Vec<(Id<PType>, Vec<Id<PTraitTypeWithBindings>>)>,
     pub members: PObjectMembers,
 }
 
@@ -207,7 +207,7 @@ impl PObject {
         parent: LId<PModule>,
         name: Id<str>,
         generics: Vec<(Span, Id<str>)>,
-        restrictions: Vec<(Id<PType>, Vec<Id<PTraitType>>)>,
+        restrictions: Vec<(Id<PType>, Vec<Id<PTraitTypeWithBindings>>)>,
         members: PObjectMembers,
     ) -> PObject {
         PObject {
@@ -235,7 +235,7 @@ pub struct PTrait {
     pub span: Span,
     pub name: Id<str>,
     pub generics: Vec<(Span, Id<str>)>,
-    pub restrictions: Vec<(Id<PType>, Vec<Id<PTraitType>>)>,
+    pub restrictions: Vec<(Id<PType>, Vec<Id<PTraitTypeWithBindings>>)>,
     pub members: Vec<PTraitMember>,
 }
 
@@ -245,7 +245,7 @@ impl PTrait {
         parent: LId<PModule>,
         name: Id<str>,
         generics: Vec<(Span, Id<str>)>,
-        restrictions: Vec<(Id<PType>, Vec<Id<PTraitType>>)>,
+        restrictions: Vec<(Id<PType>, Vec<Id<PTraitTypeWithBindings>>)>,
         members: Vec<PTraitMember>,
     ) -> PTrait {
         PTrait {
@@ -261,7 +261,7 @@ impl PTrait {
 
 #[derive(Debug, Hash, Eq, PartialEq, PrettyPrint)]
 pub enum PTraitMember {
-    Type(Span, Id<str>, Vec<Id<PTraitType>>),
+    Type(Span, Id<str>, Vec<Id<PTraitTypeWithBindings>>),
     Function {
         span: Span,
         name: Id<str>,
@@ -269,7 +269,7 @@ pub enum PTraitMember {
         has_self: Option<Span>,
         parameters: Vec<(Span, Id<str>, Id<PType>)>,
         return_ty: Id<PType>,
-        restrictions: Vec<(Id<PType>, Vec<Id<PTraitType>>)>,
+        restrictions: Vec<(Id<PType>, Vec<Id<PTraitTypeWithBindings>>)>,
     },
 }
 
@@ -277,7 +277,7 @@ impl PTraitMember {
     pub fn type_member(
         span: Span,
         name: Id<str>,
-        restrictions: Vec<Id<PTraitType>>,
+        restrictions: Vec<Id<PTraitTypeWithBindings>>,
     ) -> PTraitMember {
         PTraitMember::Type(span, name, restrictions)
     }
@@ -289,7 +289,7 @@ impl PTraitMember {
         has_self: Option<Span>,
         parameters: Vec<(Span, Id<str>, Id<PType>)>,
         return_ty: Id<PType>,
-        restrictions: Vec<(Id<PType>, Vec<Id<PTraitType>>)>,
+        restrictions: Vec<(Id<PType>, Vec<Id<PTraitTypeWithBindings>>)>,
     ) -> PTraitMember {
         PTraitMember::Function {
             span,
@@ -310,7 +310,7 @@ pub struct PImpl {
     pub generics: Vec<(Span, Id<str>)>,
     pub ty: Id<PType>,
     pub trait_ty: Option<Id<PTraitType>>,
-    pub restrictions: Vec<(Id<PType>, Vec<Id<PTraitType>>)>,
+    pub restrictions: Vec<(Id<PType>, Vec<Id<PTraitTypeWithBindings>>)>,
     pub members: Vec<PImplMember>,
 }
 
@@ -321,7 +321,7 @@ impl PImpl {
         generics: Vec<(Span, Id<str>)>,
         ty: Id<PType>,
         trait_ty: Option<Id<PTraitType>>,
-        restrictions: Vec<(Id<PType>, Vec<Id<PTraitType>>)>,
+        restrictions: Vec<(Id<PType>, Vec<Id<PTraitTypeWithBindings>>)>,
         members: Vec<PImplMember>,
     ) -> PImpl {
         PImpl {
@@ -346,7 +346,7 @@ pub enum PImplMember {
         has_self: Option<Span>,
         parameters: Vec<(Span, Id<str>, Id<PType>)>,
         return_ty: Id<PType>,
-        restrictions: Vec<(Id<PType>, Vec<Id<PTraitType>>)>,
+        restrictions: Vec<(Id<PType>, Vec<Id<PTraitTypeWithBindings>>)>,
         body: Id<PExpression>,
     },
 }
@@ -363,7 +363,7 @@ impl PImplMember {
         has_self: Option<Span>,
         parameters: Vec<(Span, Id<str>, Id<PType>)>,
         return_ty: Id<PType>,
-        restrictions: Vec<(Id<PType>, Vec<Id<PTraitType>>)>,
+        restrictions: Vec<(Id<PType>, Vec<Id<PTraitTypeWithBindings>>)>,
         body: Id<PExpression>,
     ) -> PImplMember {
         PImplMember::Function {
@@ -385,7 +385,7 @@ pub struct PEnum {
     pub span: Span,
     pub name: Id<str>,
     pub generics: Vec<(Span, Id<str>)>,
-    pub restrictions: Vec<(Id<PType>, Vec<Id<PTraitType>>)>,
+    pub restrictions: Vec<(Id<PType>, Vec<Id<PTraitTypeWithBindings>>)>,
     pub variants: Vec<(Span, Id<str>, PObjectMembers)>,
 }
 
@@ -395,7 +395,7 @@ impl PEnum {
         parent: LId<PModule>,
         name: Id<str>,
         generics: Vec<(Span, Id<str>)>,
-        restrictions: Vec<(Id<PType>, Vec<Id<PTraitType>>)>,
+        restrictions: Vec<(Id<PType>, Vec<Id<PTraitTypeWithBindings>>)>,
         variants: Vec<(Span, Id<str>, PObjectMembers)>,
     ) -> PEnum {
         PEnum {
@@ -425,6 +425,7 @@ pub enum PTypeData {
     Bool,
     String,
     SelfType,
+    Never,
 
     AmbiguousPath(Vec<(Span, Id<str>)>, Vec<Id<PType>>),
 
@@ -438,7 +439,7 @@ pub enum PTypeData {
 
     Elaborated(Id<PType>, Id<PTraitType>),
 
-    Dynamic(Vec<Id<PTraitType>>),
+    Dynamic(Id<PTraitTypeWithBindings>),
 
     Awaitable(Id<PType>),
 }
@@ -493,6 +494,13 @@ impl PType {
         }
     }
 
+    pub fn never_type(span: Span) -> PType {
+        PType {
+            span,
+            data: PTypeData::Never,
+        }
+    }
+
     pub fn array(span: Span, elem: Id<PType>) -> PType {
         PType {
             span,
@@ -528,7 +536,7 @@ impl PType {
         }
     }
 
-    pub fn dynamic_type(span: Span, tr: Vec<Id<PTraitType>>) -> PType {
+    pub fn dynamic_type(span: Span, tr: Id<PTraitTypeWithBindings>) -> PType {
         PType {
             span,
             data: PTypeData::Dynamic(tr),
@@ -558,12 +566,29 @@ impl PType {
 }
 
 #[derive(Debug, Hash, Eq, PartialEq, Lookup, PrettyPrint)]
-pub enum PTraitType {
+pub struct PTraitType {
+    pub span: Span,
+    pub path: Vec<(Span, Id<str>)>,
+    pub generics: Vec<Id<PType>>,
+}
+
+impl PTraitType {
+    pub fn new(span: Span, path: Vec<(Span, Id<str>)>, generics: Vec<Id<PType>>) -> PTraitType {
+        PTraitType {
+            span,
+            path,
+            generics,
+        }
+    }
+}
+
+#[derive(Debug, Hash, Eq, PartialEq, Lookup, PrettyPrint)]
+pub enum PTraitTypeWithBindings {
     Plain {
         span: Span,
         path: Vec<(Span, Id<str>)>,
         generics: Vec<Id<PType>>,
-        bounds: Vec<(Span, Id<str>, Id<PType>)>,
+        bindings: Vec<(Span, Id<str>, Id<PType>)>,
     },
     Function {
         span: Span,
@@ -572,33 +597,33 @@ pub enum PTraitType {
     },
 }
 
-impl PTraitType {
+impl PTraitTypeWithBindings {
     pub fn new(
         span: Span,
         path: Vec<(Span, Id<str>)>,
-        generics_and_bounds: Vec<Either<Id<PType>, (Span, Id<str>, Id<PType>)>>,
-    ) -> PTraitType {
+        generics_and_bindings: Vec<Either<Id<PType>, (Span, Id<str>, Id<PType>)>>,
+    ) -> PTraitTypeWithBindings {
         let mut generics = vec![];
-        let mut bounds = vec![];
+        let mut bindings = vec![];
 
         // I wish I could use Iterator::partition here lol
-        for e in generics_and_bounds {
+        for e in generics_and_bindings {
             match e {
                 Either::Left(l) => generics.push(l),
-                Either::Right(r) => bounds.push(r),
+                Either::Right(r) => bindings.push(r),
             }
         }
 
-        PTraitType::Plain {
+        PTraitTypeWithBindings::Plain {
             span,
             path,
             generics,
-            bounds,
+            bindings,
         }
     }
 
-    pub fn fn_trait(span: Span, params: Vec<Id<PType>>, ret: Id<PType>) -> PTraitType {
-        PTraitType::Function { span, params, ret }
+    pub fn fn_trait(span: Span, params: Vec<Id<PType>>, ret: Id<PType>) -> PTraitTypeWithBindings {
+        PTraitTypeWithBindings::Function { span, params, ret }
     }
 }
 
@@ -1146,7 +1171,7 @@ impl PStatement {
 #[derive(Debug, Hash, Eq, PartialEq, Lookup, PrettyPrint)]
 pub struct PPattern {
     pub span: Span,
-    pub ty: Id<PType>,
+    pub ty: Option<Id<PType>>,
     pub data: PPatternData,
 }
 
@@ -1170,7 +1195,7 @@ pub enum PPatternData {
 }
 
 impl PPattern {
-    pub fn underscore(span: Span, ty: Id<PType>) -> PPattern {
+    pub fn underscore(span: Span, ty: Option<Id<PType>>) -> PPattern {
         PPattern {
             span,
             ty,
@@ -1178,7 +1203,7 @@ impl PPattern {
         }
     }
 
-    pub fn literal(span: Span, ty: Id<PType>, l: PLiteral) -> PPattern {
+    pub fn literal(span: Span, ty: Option<Id<PType>>, l: PLiteral) -> PPattern {
         PPattern {
             span,
             ty,
@@ -1186,7 +1211,7 @@ impl PPattern {
         }
     }
 
-    pub fn identifier(span: Span, ty: Id<PType>, i: Id<str>) -> PPattern {
+    pub fn identifier(span: Span, ty: Option<Id<PType>>, i: Id<str>) -> PPattern {
         PPattern {
             span,
             ty,
@@ -1194,7 +1219,7 @@ impl PPattern {
         }
     }
 
-    pub fn tuple(span: Span, ty: Id<PType>, t: Vec<Id<PPattern>>) -> PPattern {
+    pub fn tuple(span: Span, ty: Option<Id<PType>>, t: Vec<Id<PPattern>>) -> PPattern {
         PPattern {
             span,
             ty,
@@ -1204,7 +1229,7 @@ impl PPattern {
 
     pub fn structural_ambiguous(
         span: Span,
-        ty: Id<PType>,
+        ty: Option<Id<PType>>,
         t: Vec<(Span, Id<str>)>,
         g: Vec<Id<PType>>,
         c: PPatternConstructorArguments,
@@ -1218,7 +1243,7 @@ impl PPattern {
 
     pub fn structural_variant(
         span: Span,
-        ty: Id<PType>,
+        ty: Option<Id<PType>>,
         t: Vec<(Span, Id<str>)>,
         g: Vec<Id<PType>>,
         v: Id<str>,

@@ -24,14 +24,12 @@ impl Self for Thread {
       panic:<()>("Cannot Thread::join() on the running thread").
     }
 
-    while true {
+    loop {
       if let Some(value) = self:completed {
         break value.
       } else {
-        todo()
+        todo() // yield
       }
-    } else {
-      unreachable()
     }
   }.
 

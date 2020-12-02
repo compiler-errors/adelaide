@@ -1,4 +1,6 @@
 #![feature(once_cell)]
+#![feature(option_unwrap_none)]
+#![feature(hash_drain_filter)]
 #![warn(clippy::pedantic)]
 
 #[macro_use]
@@ -42,7 +44,8 @@ enum Mode {
     Noop,
     Lex,
     Parse,
-    Check,
+    Lower,
+    Typecheck,
 }
 
 impl std::str::FromStr for Mode {
@@ -53,7 +56,8 @@ impl std::str::FromStr for Mode {
             "noop" | "n" => Ok(Mode::Noop),
             "lex" | "l" => Ok(Mode::Lex),
             "parse" | "p" => Ok(Mode::Parse),
-            "check" | "c" => Ok(Mode::Check),
+            "lower" | "c" => Ok(Mode::Lower),
+            "typecheck" | "t" => Ok(Mode::Typecheck),
             m => Err(format!("Invalid compiler mode `{}`", m)),
         }
     }
@@ -94,20 +98,23 @@ fn try_main(ctx: &mut AdelaideDatabase) -> AResult<()> {
     // Initialize the module tree from paths provided
     initialize_from_path_arguments(ctx, input)?;
 
-    let root = ctx.mod_tree_root();
-
     match mode {
-        Mode::Noop => stdoutln!("{:#?}", Pretty(root, ctx))?,
+        Mode::Noop => stdoutln!("{:#?}", Pretty(ctx.mod_tree_root(), ctx))?,
         Mode::Lex => {
-            ctx.lex_mod(root)?;
+            ctx.lex_mod(ctx.mod_tree_root())?;
         },
         Mode::Parse => {
             let m = ctx.parse_root()?;
-            stdoutln!("{:#?}", Pretty(m, ctx))?
+            stdoutln!("{:#?}", Pretty(m, ctx))?;
         },
-        Mode::Check => {
+        Mode::Lower => {
             let l = ctx.lower_root()?;
-            stdoutln!("{:#?}", Pretty(l, ctx))?
+            stdoutln!("{:#?}", Pretty(l, ctx))?;
+        },
+        Mode::Typecheck => {
+            //ctx.typecheck_root()?;
+            //stdoutln!("Typechecked!")?;
+            todo!();
         },
     }
 

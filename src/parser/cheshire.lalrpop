@@ -223,7 +223,7 @@ DeclParam: (Span, Id<str>, Id<PType>) = {
         (Span(file, l, h), i, t),
 };
 
-MaybeRestrictions: Vec<(Id<PType>, Vec<Id<PTraitType>>)> = {
+MaybeRestrictions: Vec<(Id<PType>, Vec<Id<PTraitTypeWithBindings>>)> = {
     "where" <Comma<TypeRestriction>> => <>,
     () => vec![],
 };
@@ -294,8 +294,8 @@ TraitMember: PTraitMember = {
     }
 };
 
-MaybeTraitTypeRestriction: Vec<Id<PTraitType>> = {
-    ":" <PlusSeparated<TraitType>>,
+MaybeTraitTypeRestriction: Vec<Id<PTraitTypeWithBindings>> = {
+    ":" <PlusSeparated<TraitTypeWithBindings>>,
     () => vec![],
 };
 
@@ -367,11 +367,12 @@ AssociableType<Kind>: Id<PType> = {
     <l:@L> "String" <h:@R> => PType::string_type(Span(file, l, h)).intern(ctx),
     <l:@L> "Char" <h:@R> => PType::char_type(Span(file, l, h)).intern(ctx),
     <l:@L> "Self" <h:@R> => PType::self_type(Span(file, l, h)).intern(ctx),
+    <l:@L> "!" <h:@R> => PType::never_type(Span(file, l, h)).intern(ctx),
 
     <l:@L> "<" <t:Type> "as" <tr:TraitType> ">" <h:@R> =>
         PType::elaborated_type(Span(file, l, h), t, tr).intern(ctx),
 
-    <l:@L> "Dyn" <tr:MaybeDynTraits> <h:@R> =>
+    <l:@L> "Dyn" "<" <tr:TraitTypeWithBindings> ">" <h:@R> =>
         PType::dynamic_type(Span(file, l, h), tr).intern(ctx),
 
     // Object or enum types, with optional generic. E.g. `Option<Int>`
@@ -380,19 +381,26 @@ AssociableType<Kind>: Id<PType> = {
 };
 
 TupleType: Id<PType> = {
-    <l:@L> "(" ")" <h:@R> => PType::tuple(Span(file, l, h), vec![]).intern(ctx),
-    <l:@L> "(" <v:(<Type> ",")+> <e:Type?> ")" <h:@R> => PType::tuple(Span(file, l, h), append_maybe(v, e)).intern(ctx),
+    <l:@L> "(" ")" <h:@R> => 
+        PType::tuple(Span(file, l, h), vec![]).intern(ctx),
+    <l:@L> "(" <v:(<Type> ",")+> <e:Type?> ")" <h:@R> => 
+        PType::tuple(Span(file, l, h), append_maybe(v, e)).intern(ctx),
 };
 
-TypeRestriction: (Id<PType>, Vec<Id<PTraitType>>) = {
-    <Type> ":" <PlusSeparated<TraitType>>,
+TypeRestriction: (Id<PType>, Vec<Id<PTraitTypeWithBindings>>) = {
+    <Type> ":" <PlusSeparated<TraitTypeWithBindings>>,
+};
+
+TraitTypeWithBindings: Id<PTraitTypeWithBindings> = {
+    <l:@L> <t:TypeNamePath> <g:MaybeGenericsOrAssoc> <h:@R> =>
+        PTraitTypeWithBindings::new(Span(file, l, h), t, g).intern(ctx),
+    <l:@L> "Fn" "(" <p:CommaTrailingOrEmpty<Type>> ")" <r:MaybeReturn> <h:@R> =>
+        PTraitTypeWithBindings::fn_trait(Span(file, l, h), p, r).intern(ctx),
 };
 
 TraitType: Id<PTraitType> = {
-    <l:@L> <t:TypeNamePath> <g:MaybeGenericsOrAssoc> <h:@R> =>
+    <l:@L> <t:TypeNamePath> <g:MaybeGenerics<"">> <h:@R> =>
         PTraitType::new(Span(file, l, h), t, g).intern(ctx),
-    <l:@L> "Fn" "(" <p:CommaTrailingOrEmpty<Type>> ")" <r:MaybeReturn> <h:@R> =>
-        PTraitType::fn_trait(Span(file, l, h), p, r).intern(ctx),
 };
 
 MaybeGenerics<Kind> = {
@@ -401,8 +409,8 @@ MaybeGenerics<Kind> = {
     () => vec![],
 };
 
-MaybeDynTraits: Vec<Id<PTraitType>> = {
-    "<" <PlusSeparated<TraitType>> ">",
+MaybeDynTraits: Vec<Id<PTraitTypeWithBindings>> = {
+    "<" <PlusSeparated<TraitTypeWithBindings>> ">",
 };
 
 MaybeGenericsOrAssoc = {
@@ -725,9 +733,9 @@ Pattern: Id<PPattern> = {
         PPattern::structural_variant(Span(file, l, h), t, p, g, v, a).intern(ctx),
 };
 
-MaybePatternType: Id<PType> = {
-    ":" <Type>,
-    <l:@L> () <h:@R> => PType::infer(Span(file, l, h)).intern(ctx),
+MaybePatternType: Option<Id<PType>> = {
+    ":" <Type> => Some(<>),
+    () => None,
 };
 
 PatternConstructorArguments: PPatternConstructorArguments = {
@@ -750,7 +758,7 @@ NamedPatternFields: PPatternConstructorArguments = {
 NamedPatternField: (Span, Id<str>, Id<PPattern>) = {
     <l:@L> <i:Identifier> <h:@R> => {
         let span = Span(file, l, h);
-        (span, i.clone(), PPattern::identifier(span, PType::infer(span).intern(ctx), i).intern(ctx))
+        (span, i.clone(), PPattern::identifier(span, None, i).intern(ctx))
     },
     <l:@L> <i:Identifier> ":" <p:Pattern> <h:@R> =>
         (Span(file, l, h), i, p),

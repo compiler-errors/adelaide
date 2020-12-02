@@ -1,4 +1,5 @@
 use any::*.
+use lang::*.
 use operators::*.
 use iterator::*.
 use option::{*, Option::{None, Some}}.
@@ -20,7 +21,7 @@ fn println(s: String) = {
   print(s + "\n").
 }.
 
-fn todo<T>() -> T = {
+fn todo() -> ! = {
   panic("TODO")
 }.
 

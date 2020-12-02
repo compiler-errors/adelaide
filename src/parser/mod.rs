@@ -24,6 +24,14 @@ pub fn parse_std(ctx: &dyn AdelaideContext) -> AResult<Id<PModule>> {
     ctx.parse_mod(ctx.mod_tree_root().lookup(ctx).children["std"])
 }
 
+pub fn parse_lang(ctx: &dyn AdelaideContext) -> AResult<Id<PModule>> {
+    ctx.parse_mod(
+        ctx.mod_tree_root().lookup(ctx).children["std"]
+            .lookup(ctx)
+            .children["lang"],
+    )
+}
+
 pub fn parse_mod(ctx: &dyn AdelaideContext, file_id: Id<AFile>) -> AResult<Id<PModule>> {
     let raw_mod = ctx.read_file(file_id)?;
 
@@ -43,8 +51,8 @@ pub fn parse_mod(ctx: &dyn AdelaideContext, file_id: Id<AFile>) -> AResult<Id<PM
 
     let mut items = vec![];
 
-    for c in ctx.literal_module_children(file_id) {
-        items.push(PItem::Module(ctx.parse_mod(c)?));
+    for c in &*ctx.literal_module_children(file_id) {
+        items.push(PItem::Module(ctx.parse_mod(*c)?));
     }
 
     let parsed_items = cheshire::ModuleParser::new()

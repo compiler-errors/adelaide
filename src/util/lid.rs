@@ -1,4 +1,4 @@
-use std::{fmt::Debug, hash::Hash, lazy::SyncOnceCell};
+use std::{cmp::Ordering, fmt::Debug, hash::Hash, lazy::SyncOnceCell, sync::Arc};
 
 use crate::{
     ctx::AdelaideContext,
@@ -8,9 +8,9 @@ use crate::{
 pub struct LId<T: LateLookup + ?Sized>(pub Id<T::Source>, SyncOnceCell<Id<T>>);
 
 impl<T: LateLookup + Lookup + ?Sized> LId<T> {
-    /*pub fn lookup(&self, ctx: &dyn AdelaideContext) -> Arc<T> {
+    pub fn lookup(&self, ctx: &dyn AdelaideContext) -> Arc<T> {
         self.get(ctx).lookup(ctx)
-    }*/
+    }
 
     pub fn get(&self, ctx: &dyn AdelaideContext) -> Id<T> {
         *self.1.get_or_init(|| T::late_lookup(self.0, ctx))
@@ -74,3 +74,15 @@ impl<T: LateLookup + ?Sized> PartialEq for LId<T> {
 }
 
 impl<T: LateLookup + ?Sized> Eq for LId<T> {}
+
+impl<T: LateLookup + ?Sized> PartialOrd for LId<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.0.cmp(&other.0))
+    }
+}
+
+impl<T: LateLookup + ?Sized> Ord for LId<T> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.0.cmp(&other.0)
+    }
+}
