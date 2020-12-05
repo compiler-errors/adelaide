@@ -26,13 +26,13 @@ pub enum LExpressionData {
     Literal(PLiteral),
     Variable(LVariable),
     Block(Vec<Id<LStatement>>, Id<LExpression>),
-    AsyncBlock(LVariableContext, Id<LExpression>),
+    AsyncBlock(LVariableContext, Id<LExpression>, Id<LType>),
     Global(LId<LGlobal>),
     GlobalFunction(LId<LFunction>, Vec<Id<LType>>),
     Access(Id<LExpression>, Span, Id<str>),
     IndexAccess(Id<LExpression>, Span, usize),
     Tuple(Vec<Id<LExpression>>),
-    ArrayLiteral(Vec<Id<LExpression>>),
+    ArrayLiteral(Vec<Id<LExpression>>, Id<LType>),
     Assign(Id<LExpression>, Id<LExpression>),
     StaticCall(
         bool,
@@ -41,11 +41,12 @@ pub enum LExpressionData {
         Id<str>,
         Vec<Id<LType>>,
         Vec<Id<LExpression>>,
+        Id<LType>,
     ),
     Call(LId<LFunction>, Vec<Id<LType>>, Vec<Id<LExpression>>),
     Or(Id<LExpression>, Id<LExpression>),
     And(Id<LExpression>, Id<LExpression>),
-    PollTrampoline(Id<LExpression>),
+    PollTrampoline(Id<LExpression>, Id<LType>),
     Return(Id<LExpression>),
     Break(LoopId, Id<LExpression>),
     Continue(LoopId),
@@ -64,7 +65,7 @@ pub enum LExpressionData {
         Id<LExpression>,
     ),
     If(Id<LExpression>, Id<LExpression>, Id<LExpression>),
-    Loop(LoopId, Id<LExpression>, bool),
+    Loop(LoopId, Id<LExpression>, Id<LType>),
     Match(Id<LExpression>, Vec<(Id<LPattern>, Id<LExpression>)>),
 }
 
@@ -172,11 +173,11 @@ impl LoweringContext<'_> {
                 let e = self.lower_expr(*e)?;
                 let ctx = self.exit_context();
 
-                LExpressionData::AsyncBlock(ctx, e)
+                LExpressionData::AsyncBlock(ctx, e, self.fresh_infer_ty(*span))
             },
             PExpressionData::Tuple(es) => LExpressionData::Tuple(self.lower_exprs(es)?),
             PExpressionData::ArrayLiteral(es) =>
-                LExpressionData::ArrayLiteral(self.lower_exprs(es)?),
+                LExpressionData::ArrayLiteral(self.lower_exprs(es)?, self.fresh_infer_ty(*span)),
             PExpressionData::Array(a, n) => {
                 let a = self.lower_ty(*a, true, true)?;
                 let n = self.lower_expr(*n)?;
@@ -188,6 +189,7 @@ impl LoweringContext<'_> {
                     "allocate_array",
                     vec![],
                     vec![n],
+                    *span,
                 )
             },
             PExpressionData::Literal(l) => LExpressionData::Literal(*l),
@@ -202,6 +204,7 @@ impl LoweringContext<'_> {
                     "range",
                     vec![],
                     vec![a, b],
+                    *span,
                 )
             },
             PExpressionData::BinOp(a, PBinopKind::RangeInclusive, b) => {
@@ -216,6 +219,7 @@ impl LoweringContext<'_> {
                     "range",
                     vec![],
                     vec![a, b],
+                    *span,
                 )
             },
             PExpressionData::BinOp(a, PBinopKind::RangeExclusive, b) => {
@@ -230,6 +234,7 @@ impl LoweringContext<'_> {
                     "range",
                     vec![],
                     vec![a, b],
+                    *span,
                 )
             },
             PExpressionData::BinOp(a, PBinopKind::OrCircuit, b) =>
@@ -251,10 +256,10 @@ impl LoweringContext<'_> {
                     PBinopKind::Eq => ("Equals", "eq"),
                     PBinopKind::Ne => ("Equals", "ne"),
                     PBinopKind::Plus => ("Add", "add"),
-                    PBinopKind::Minus => ("Subtract", "subtract"),
+                    PBinopKind::Minus => ("Subtract", "sub"),
                     PBinopKind::Mul => ("Multiply", "mul"),
                     PBinopKind::Div => ("Divide", "div"),
-                    PBinopKind::Mod => ("Modulo", "mod"),
+                    PBinopKind::Mod => ("Modulo", "rem"),
                     // These have been lowered separately
                     PBinopKind::OrCircuit
                     | PBinopKind::AndCircuit
@@ -270,6 +275,7 @@ impl LoweringContext<'_> {
                     f,
                     vec![],
                     vec![a, b],
+                    *span,
                 )
             },
             PExpressionData::Assign(a, b) => match &a.lookup(self.ctx).data {
@@ -289,6 +295,7 @@ impl LoweringContext<'_> {
                         "deref_assign",
                         vec![],
                         vec![a, i, b],
+                        *span,
                     )
                 },
                 _ => {
@@ -307,6 +314,7 @@ impl LoweringContext<'_> {
                     "not",
                     vec![],
                     vec![e],
+                    *span,
                 )
             },
             PExpressionData::Neg(e) => {
@@ -319,6 +327,7 @@ impl LoweringContext<'_> {
                     "negate",
                     vec![],
                     vec![e],
+                    *span,
                 )
             },
             PExpressionData::InterpolationBegin(l, s) => {
@@ -335,7 +344,16 @@ impl LoweringContext<'_> {
                 .intern(self.ctx);
                 let s = self.lower_expr(*s)?;
 
-                self.std_static_call(true, string, "Add", vec![string], "add", vec![], vec![l, s])
+                self.std_static_call(
+                    true,
+                    string,
+                    "Add",
+                    vec![string],
+                    "add",
+                    vec![],
+                    vec![l, s],
+                    *span,
+                )
             },
             PExpressionData::InterpolationContinue(a, l, s) => {
                 let string = LType {
@@ -361,6 +379,7 @@ impl LoweringContext<'_> {
                         "into",
                         vec![],
                         vec![a],
+                        *span,
                     ),
                 }
                 .intern(self.ctx);
@@ -375,14 +394,22 @@ impl LoweringContext<'_> {
                         "add",
                         vec![],
                         vec![a, l],
+                        *span,
                     ),
                 }
                 .intern(self.ctx);
                 let s = self.lower_expr(*s)?;
 
-                self.std_static_call(true, string, "Add", vec![string], "add", vec![], vec![
-                    al, s,
-                ])
+                self.std_static_call(
+                    true,
+                    string,
+                    "Add",
+                    vec![string],
+                    "add",
+                    vec![],
+                    vec![al, s],
+                    *span,
+                )
             },
             PExpressionData::InterpolationEnd(a, l) => {
                 let string = LType {
@@ -408,11 +435,21 @@ impl LoweringContext<'_> {
                         "into",
                         vec![],
                         vec![a],
+                        *span,
                     ),
                 }
                 .intern(self.ctx);
 
-                self.std_static_call(true, string, "Add", vec![string], "add", vec![], vec![a, l])
+                self.std_static_call(
+                    true,
+                    string,
+                    "Add",
+                    vec![string],
+                    "add",
+                    vec![],
+                    vec![a, l],
+                    *span,
+                )
             },
             PExpressionData::Call(c, ps) => {
                 let c = self.lower_expr(*c)?;
@@ -440,27 +477,56 @@ impl LoweringContext<'_> {
                         "call",
                         vec![],
                         vec![c, ps],
+                        *span,
                     )
                 }
             },
             PExpressionData::StaticCall(t, n, gs, ps) => {
-                let (t, tr) = self.lower_elaborated_ty(*t, true, true)?;
+                let (t, trait_ty) = self.lower_elaborated_ty(*t, true, true)?;
                 let gs = self.lower_tys(gs, true, true)?;
                 let ps = self.lower_exprs(ps)?;
 
-                if let Some(tr) = tr {
-                    let info = tr.lookup(self.ctx).tr.source().lookup(self.ctx);
+                if let Some(trait_ty) = trait_ty {
+                    let tr = trait_ty.lookup(self.ctx).tr.source();
+                    let shape = self.ctx.trait_shape(tr)?;
+
+                    if !shape.methods.contains_key(n) {
+                        let info = tr.lookup(self.ctx);
+                        return Err(AError::NoMethod {
+                            trait_name: info.name,
+                            trait_span: info.span,
+                            name: *n,
+                            use_span: *span,
+                        });
+                    }
+
                     let gs = self.check_generics_parity(
                         gs,
                         *span,
-                        info.generics.len(),
-                        info.span,
+                        shape.method_generics[n],
+                        shape.methods[n],
                         true,
                     )?;
 
-                    LExpressionData::StaticCall(false, t, Some(tr), *n, gs, ps)
+                    LExpressionData::StaticCall(
+                        false,
+                        t,
+                        Some(trait_ty),
+                        *n,
+                        gs,
+                        ps,
+                        self.fresh_infer_ty(*span),
+                    )
                 } else {
-                    LExpressionData::StaticCall(false, t, None, *n, gs, ps)
+                    LExpressionData::StaticCall(
+                        false,
+                        t,
+                        None,
+                        *n,
+                        gs,
+                        ps,
+                        self.fresh_infer_ty(*span),
+                    )
                 }
             },
             PExpressionData::ObjectCall(e, n, g, p) => {
@@ -474,6 +540,7 @@ impl LoweringContext<'_> {
                     *n,
                     self.lower_tys(g, true, true)?,
                     p,
+                    self.fresh_infer_ty(*span),
                 )
             },
             PExpressionData::If(p, t, e) => LExpressionData::If(
@@ -489,8 +556,18 @@ impl LoweringContext<'_> {
             PExpressionData::Loop(l, e) => {
                 let l = self.enter_label(*l);
                 let e = self.lower_expr(*e)?;
-                let used = self.exit_label();
-                LExpressionData::Loop(l, e, used)
+
+                let ty = if self.exit_label() {
+                    self.fresh_infer_ty(*span)
+                } else {
+                    LType {
+                        data: LTypeData::Never,
+                        span: *span,
+                    }
+                    .intern(self.ctx)
+                };
+
+                LExpressionData::Loop(l, e, ty)
             },
             PExpressionData::While(l, p, t, els) =>
                 self.lower_expr_while(e, *span, *l, *p, *t, *els)?,
@@ -583,6 +660,15 @@ impl LoweringContext<'_> {
             },
             PExpressionData::Allocate(p, g, a) => match self.lookup_path(p)? {
                 LScopeItem::Object(o) => {
+                    if LScopeItem::Object(o) == self.ctx.std_item("Awaitable") {
+                        return Err(AError::CannotConstruct {
+                            kind: "object",
+                            name: self.ctx.static_name("Awaitable"),
+                            use_span: *span,
+                            def_span: o.lookup(self.ctx).span,
+                        });
+                    }
+
                     let info = o.lookup(self.ctx);
                     if info.is_structural {
                         return Err(AError::TriedAllocatingStruct {
@@ -671,6 +757,7 @@ impl LoweringContext<'_> {
                     "deref",
                     vec![],
                     vec![a, i],
+                    *span,
                 )
             },
             PExpressionData::NamedAccess(o, span, i) =>
@@ -701,6 +788,7 @@ impl LoweringContext<'_> {
                         "poll",
                         vec![],
                         vec![a],
+                        *span,
                     ),
                 }
                 .intern(self.ctx);
@@ -708,7 +796,7 @@ impl LoweringContext<'_> {
                 // Lower `e:await` into `poll_trampoline(<_ as Poll>::poll(e))`
                 // poll_trampoline will do the work of actually unwinding the
                 // thread on an incomplete.
-                LExpressionData::PollTrampoline(poll_call)
+                LExpressionData::PollTrampoline(poll_call, self.fresh_infer_ty(*span))
             },
         };
 
@@ -737,6 +825,7 @@ impl LoweringContext<'_> {
         fun_name: &'static str,
         fun_generics: Vec<Id<LType>>,
         params: Vec<Id<LExpression>>,
+        return_span: Span,
     ) -> LExpressionData {
         if let LScopeItem::Trait(tr) = self.ctx.std_item(tr) {
             LExpressionData::StaticCall(
@@ -744,6 +833,7 @@ impl LoweringContext<'_> {
                 call_ty,
                 Some(
                     LTraitType {
+                        span: call_ty.lookup(self.ctx).span,
                         tr: tr.into(),
                         generics: tr_generics,
                     }
@@ -752,6 +842,7 @@ impl LoweringContext<'_> {
                 self.ctx.static_name(fun_name),
                 fun_generics,
                 params,
+                self.fresh_infer_ty(return_span),
             )
         } else {
             unreachable!()
@@ -781,7 +872,6 @@ impl LoweringContext<'_> {
 
         let label = self.enter_label(label);
         let then_expr = self.lower_expr(then_expr)?;
-        let used = self.exit_label();
 
         let else_expr = LExpression {
             source,
@@ -798,7 +888,7 @@ impl LoweringContext<'_> {
                 data: LExpressionData::If(condition, then_expr, else_expr),
             }
             .intern(self.ctx),
-            used,
+            self.fresh_infer_ty(span),
         ))
     }
 
@@ -849,6 +939,7 @@ impl LoweringContext<'_> {
                         "iterator",
                         vec![],
                         vec![iterable],
+                        span,
                     ),
                 }
                 .intern(self.ctx),
@@ -872,6 +963,7 @@ impl LoweringContext<'_> {
                     data: LExpressionData::Variable(iterator_var),
                 }
                 .intern(self.ctx)],
+                span,
             ),
         }
         .intern(self.ctx);
@@ -954,7 +1046,7 @@ impl LoweringContext<'_> {
             ),
         }
         .intern(self.ctx);
-        let used = self.exit_label();
+        self.exit_label();
         self.exit_block();
 
         let bad_pattern = self.fresh_empty_pattern(span);
@@ -978,7 +1070,7 @@ impl LoweringContext<'_> {
         let unwrap_loop = LExpression {
             source,
             span,
-            data: LExpressionData::Loop(label, unwrap_match, used),
+            data: LExpressionData::Loop(label, unwrap_match, self.fresh_infer_ty(span)),
         }
         .intern(self.ctx);
 

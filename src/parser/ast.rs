@@ -932,14 +932,14 @@ impl PExpression {
     pub fn not(span: Span, a: Id<PExpression>) -> PExpression {
         PExpression {
             span,
-            data: PExpressionData::Neg(a),
+            data: PExpressionData::Not(a),
         }
     }
 
     pub fn neg(span: Span, a: Id<PExpression>) -> PExpression {
         PExpression {
             span,
-            data: PExpressionData::Not(a),
+            data: PExpressionData::Neg(a),
         }
     }
 

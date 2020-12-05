@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap, VecDeque},
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
     fmt::{Debug, Formatter, Result},
     sync::Arc,
 };
@@ -85,6 +85,18 @@ impl<K: PrettyPrint, V: PrettyPrint> PrettyPrint for HashMap<K, V> {
 
         for (k, v) in self {
             h.entry(&Pretty(k, ctx), &Pretty(v, ctx));
+        }
+
+        h.finish()
+    }
+}
+
+impl<K: PrettyPrint> PrettyPrint for HashSet<K> {
+    fn fmt(&self, f: &mut Formatter, ctx: &dyn AdelaideContext) -> Result {
+        let mut h = f.debug_set();
+
+        for k in self {
+            h.entry(&Pretty(k, ctx));
         }
 
         h.finish()

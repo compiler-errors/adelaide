@@ -24,59 +24,14 @@ trait FromIterator<I> {
   fn from_iterator<It>(it: It) -> Self where It: Iterator<Item=I>.
 }
 
-enum RangeIterator {
-  Inclusive(Int, Int),
-  Exclusive(Int, Int),
-  Infinite(Int),
-}
-
-impl Iterator for RangeIterator {
-  type Item = Int.
-
-  fn next(self) -> (Option<Int>, Self) = {
-    match self {
-      RangeIterator::Inclusive(a, b) =>
-        if a <= b {
-          (Some(a), RangeIterator::Inclusive(a + 1, b))
-        } else {
-          (None, self)
-        },
-      RangeIterator::Exclusive(a, b) =>
-        if a < b {
-          (Some(a), RangeIterator::Exclusive(a + 1, b))
-        } else {
-          (None, self)
-        },
-      RangeIterator::Infinite(a) =>
-        (Some(a), RangeIterator::Infinite(a + 1)),
-    }
-  }.
-
-  fn has_next(self) -> Bool = {
-    match self {
-      RangeIterator::Inclusive(a, b) => a <= b,
-      RangeIterator::Exclusive(a, b) => a < b,
-      RangeIterator::Infinite(_) => true,
-    }
-  }.
-
-  fn size_hint(self) -> Int = {
-    match self {
-      RangeIterator::Inclusive(a, b) => b - a + 1,
-      RangeIterator::Exclusive(a, b) => b - a,
-      RangeIterator::Infinite(_) => -1,
-    }
-  }.
-}
-
 impl<It> Self for It where It: Iterator {
-  fn map<F>(self, fun: F) -> Map<It, F> = Map { fun, iterator: self }.
+  fn map<F, O>(self, fun: F) -> Map<It, F> where F: Fn(<Self as Iterator>::Item) -> O = Map { fun, iterator: self }.
   fn enumerate(self) -> Enumerate<It> = Enumerate { idx: 0, iterator: self }.
   fn limit(self, limit: Int) -> Limit<It> = Limit { remaining: limit, iterator: self }.
-  fn zip<It2>(self, other: It2) -> Zip<It, It2> = Zip(self, other).
+  fn zip<It2>(self, other: It2) -> Zip<It, It2> where It2: Iterator = Zip(self, other).
 
   fn collect<C>(self) -> C where C: FromIterator<<Self as Iterator>::Item> = {
-    <C>::from_iterator(self)
+    C::from_iterator(self)
   }.
 
   fn fold<F, I>(self, i: I, f: F) -> I where F: Fn(I, <Self as Iterator>::Item) -> I = {
@@ -277,11 +232,11 @@ impl<I> FromIterator<I> for [I] {
     let s = it:size_hint().
     let last = -1.
 
-    let a = internal_alloc_empty_array:<I>(s).
+    let a = internal_alloc_empty_array(max(0, s)).
 
     for (i, x) in it:enumerate() {
       if i >= a:len() {
-        a = internal_resize_array(a, a:len() * 2).
+        a = copy_array_with_size(a, a:len() * 2).
       }
 
       a[i] = x.
@@ -291,7 +246,7 @@ impl<I> FromIterator<I> for [I] {
     if a:len() == last + 1 {
       a
     } else {
-      internal_resize_array(a, last + 1)
+      copy_array_with_size(a, last + 1)
     }
   }.
 }

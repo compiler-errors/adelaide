@@ -22,8 +22,8 @@ pub enum LTypeData {
     Char,
     Bool,
     String,
-    SelfType,
     Never,
+    SelfSkolem(LGeneric),
     Generic(LGeneric),
     Array(Id<LType>),
     Tuple(Vec<Id<LType>>),
@@ -37,12 +37,14 @@ pub enum LTypeData {
 
 #[derive(Debug, Hash, Eq, PartialEq, Lookup, PrettyPrint)]
 pub struct LTraitType {
+    pub span: Span,
     pub tr: LId<LTrait>,
     pub generics: Vec<Id<LType>>,
 }
 
 #[derive(Debug, Hash, Eq, PartialEq, Lookup, PrettyPrint)]
 pub struct LTraitTypeWithBindings {
+    pub span: Span,
     pub tr: LId<LTrait>,
     pub generics: Vec<Id<LType>>,
     pub bindings: BTreeMap<Id<str>, Id<LType>>,
@@ -150,7 +152,7 @@ impl LoweringContext<'_> {
             PTypeData::Bool => LTypeData::Bool,
             PTypeData::String => LTypeData::String,
             PTypeData::SelfType =>
-                if let Some(self_ty) = self.self_type {
+                if let Some(self_ty) = self.self_ty {
                     return Ok(self_ty);
                 } else {
                     return Err(AError::IllegalSelf { span: *span });
@@ -256,6 +258,7 @@ impl LoweringContext<'_> {
         )?;
 
         Ok(LTraitType {
+            span: *span,
             tr: tr.into(),
             generics,
         }
@@ -330,6 +333,7 @@ impl LoweringContext<'_> {
                 }
 
                 Ok(LTraitTypeWithBindings {
+                    span: *span,
                     tr: tr.into(),
                     generics,
                     bindings: lowered_bindings,
@@ -349,9 +353,10 @@ impl LoweringContext<'_> {
                 }
                 .intern(self.ctx)];
 
-                let bindings = btreemap! { self.ctx.static_name("Ret") => self.lower_ty(*ret, infer_allowed, assoc_allowed)? };
+                let bindings = btreemap! { self.ctx.static_name("Return") => self.lower_ty(*ret, infer_allowed, assoc_allowed)? };
 
                 Ok(LTraitTypeWithBindings {
+                    span: *span,
                     tr: tr.into(),
                     generics,
                     bindings,

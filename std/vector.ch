@@ -22,6 +22,19 @@ impl<T> Self for Vector<T> {
     }
   }.
 
+  fn new_from<V>(source: V) -> Vector<T> where V: Iterable<Item = T> + Len = {
+    let size = source:len().
+    let array = internal_alloc_empty_array(size).
+    let vec: Vector<_> = allocate Vector { array, size }.
+
+    for (i, t) in source:iterator():enumerate() {
+      let tt: T = array[i].
+      tt = t.
+    }
+
+    vec
+  }.
+
   fn push(self, t: T) = {
     self:ensure_size(self:size + 1).
     self:array[self:size] = t.
@@ -52,13 +65,13 @@ impl<T> Self for Vector<T> {
       new_size = new_size * 2.
     }
 
-    self:array = internal_resize_array:<T>(self:array, new_size).
+    self:array = copy_array_with_size(self:array, new_size).
     assert self:array:len() >= n.
   }.
 
   fn into_array(self) -> [T] = {
     if self:array:len() != self:size {
-      internal_resize_array(self:array, self:size)
+      copy_array_with_size(self:array, self:size)
     } else {
       self:array
     }
@@ -162,3 +175,13 @@ impl<I> FromIterator<I> for Vector<I> {
     v
   }.
 }
+
+fn copy_array_with_size<T>(input: [T], new_size: Int) -> [T] = {
+  let output = internal_alloc_empty_array(new_size).
+
+  for (i, n) in input:iterator():limit(new_size):enumerate() {
+    output[i] = n.
+  }
+
+  output
+}.

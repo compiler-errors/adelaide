@@ -218,7 +218,7 @@ fn lookup_item_early_deep(
     mut path: VecDeque<(Span, Id<str>)>,
     seen: &mut HashMap<(Id<PModule>, Id<str>), LUseResult>,
 ) -> LUseResult {
-    let parse_root = ctx.parse_root()?;
+    let parse_program = ctx.parse_program()?;
     assert!(!path.is_empty(), "Cannot lookup an empty path!");
 
     while !path.is_empty() || matches!(current_item, LUseItem::Imported { .. }) {
@@ -293,7 +293,7 @@ fn lookup_item_early_deep(
                             } else {
                                 current_item = lookup_item_early_deep(
                                     ctx,
-                                    LUseItem::Module(parse_root),
+                                    LUseItem::Module(parse_program),
                                     vec![(span, name)].into(),
                                     seen,
                                 )
@@ -354,7 +354,7 @@ pub fn lookup_item_early_deep_relative(
         None
     };
 
-    match lookup_item_early_deep(ctx, LUseItem::Module(ctx.parse_root()?), path, seen) {
+    match lookup_item_early_deep(ctx, LUseItem::Module(ctx.parse_program()?), path, seen) {
         Ok(i) => Ok(i),
         Err(e) => Err(original_error.unwrap_or(e)),
     }
@@ -414,7 +414,7 @@ pub fn mod_items(
         &mut blame_spans,
         &mut visited,
         ctx,
-        LUseItem::Module(ctx.parse_root()?),
+        LUseItem::Module(ctx.parse_program()?),
         true,
     )?;
 
@@ -438,7 +438,7 @@ fn mod_items_deep(
     item: LUseItem,
     allow_shadow: bool,
 ) -> AResult<()> {
-    let parse_root = ctx.parse_root()?;
+    let parse_program = ctx.parse_program()?;
 
     match item {
         LUseItem::Module(module) => {
@@ -457,7 +457,7 @@ fn mod_items_deep(
                         name,
                         in_module: _,
                     } => {
-                        let base = base.unwrap_or(parse_root);
+                        let base = base.unwrap_or(parse_program);
                         let item = ctx.lookup_item_early(base, path.clone())?;
                         insert_late_item(
                             items,
@@ -484,7 +484,7 @@ fn mod_items_deep(
                 }
 
                 for (relative, path, _) in &info.full_imports {
-                    let base = relative.unwrap_or(parse_root);
+                    let base = relative.unwrap_or(parse_program);
                     let item = ctx.lookup_item_early(base, path.clone())?;
                     mod_items_deep(items, blame_spans, visited, ctx, item, allow_shadow)?;
                 }

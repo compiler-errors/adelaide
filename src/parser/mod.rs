@@ -16,7 +16,7 @@ use crate::{
     util::{AError, AResult, Id, Intern},
 };
 
-pub fn parse_root(ctx: &dyn AdelaideContext) -> AResult<Id<PModule>> {
+pub fn parse_program(ctx: &dyn AdelaideContext) -> AResult<Id<PModule>> {
     ctx.parse_mod(ctx.mod_tree_root())
 }
 

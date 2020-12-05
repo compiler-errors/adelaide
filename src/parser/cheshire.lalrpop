@@ -711,25 +711,25 @@ MaybeLabel: Option<Id<str>> = {
 
 Pattern: Id<PPattern> = {
     // Ignore pattern, `_`
-    <l:@L> "_" <t:MaybePatternType> <h:@R> =>
+    <l:@L> "_" <h:@R> <t:MaybePatternType> =>
         PPattern::underscore(Span(file, l, h), t).intern(ctx),
     // A literal pattern (Bool, String, Int, Float, Char)
-    <l:@L> <i:Literal> <t:MaybePatternType> <h:@R> =>
+    <l:@L> <i:Literal> <h:@R> <t:MaybePatternType> =>
         PPattern::literal(Span(file, l, h), t, i).intern(ctx),
     // A variable binding
-    <l:@L> <i:Identifier> <t:MaybePatternType> <h:@R> =>
+    <l:@L> <i:Identifier> <h:@R> <t:MaybePatternType> =>
         PPattern::identifier(Span(file, l, h), t, i).intern(ctx),
     // The empty tuple pattern
-    <l:@L> "(" ")" <t:MaybePatternType> <h:@R> =>
+    <l:@L> "(" ")" <h:@R> <t:MaybePatternType> =>
         PPattern::tuple(Span(file, l, h), t, vec![]).intern(ctx),
     // A non-empty tuple pattern
     // NOTE: This does not allow `(a)`, due to congruency with tuple construction.
-    <l:@L> "(" <v:(<Pattern> ",")+> <e:Pattern?> ")" <t:MaybePatternType> <h:@R> =>
+    <l:@L> "(" <v:(<Pattern> ",")+> <e:Pattern?> ")" <h:@R> <t:MaybePatternType> =>
         PPattern::tuple(Span(file, l, h), t, append_maybe(v, e)).intern(ctx),
     // Enum constructor tuple patterns
-    <l:@L> <p:TypeNamePath> <g:MaybeGenerics<"Expr">> <a:PatternConstructorArguments> <t:MaybePatternType> <h:@R> =>
+    <l:@L> <p:TypeNamePath> <g:MaybeGenerics<"Expr">> <a:PatternConstructorArguments> <h:@R> <t:MaybePatternType> =>
     PPattern::structural_ambiguous(Span(file, l, h), t, p, g, a).intern(ctx),
-    <l:@L> <p:TypeNamePath> <g:MaybeGenerics<"Expr">> "::" <v:TypeName> <a:PatternConstructorArguments> <t:MaybePatternType> <h:@R> =>
+    <l:@L> <p:TypeNamePath> <g:MaybeGenerics<"Expr">> "::" <v:TypeName> <a:PatternConstructorArguments> <h:@R> <t:MaybePatternType> =>
         PPattern::structural_variant(Span(file, l, h), t, p, g, v, a).intern(ctx),
 };
 

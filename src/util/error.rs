@@ -3,12 +3,18 @@ use std::path::PathBuf;
 use codespan_reporting::diagnostic::Diagnostic;
 
 use crate::{
-    ctx::AdelaideContext, file::AFile, lexer::Span, lowering::LUseError, parser::PModPath, util::Id,
+    ctx::AdelaideContext,
+    file::AFile,
+    lexer::Span,
+    lowering::LUseError,
+    parser::PModPath,
+    typechecker::{TImplWitness, TTraitType, TType},
+    util::Id,
 };
 
 pub type AResult<T> = std::result::Result<T, AError>;
 
-#[derive(Debug, Clone, Hash, Eq, PartialEq, Diagnostic)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq, Diagnostic, PrettyPrint)]
 pub enum AError {
     #[message = "IO Error while reading {child_path}"]
     #[note = "{io_error}"]
@@ -196,6 +202,16 @@ pub enum AError {
         span: Span,
     },
 
+    #[message = "No such method `{name}` in trait `{trait_name}`"]
+    NoMethod {
+        trait_name: Id<str>,
+        #[span = "Trait `{trait_name}` defined here"]
+        trait_span: Span,
+        name: Id<str>,
+        #[span = "Method called here"]
+        use_span: Span,
+    },
+
     // TODO: Make this message better, lol
     #[message = "Impl is an orphan, must be declared in either the trait's module or the type's \
                  module"]
@@ -371,6 +387,74 @@ pub enum AError {
         #[span = "Associated type defined here"]
         #[span]
         def_span: Span,
+    },
+
+    #[message = "Conflicting solutions:\n\n\n{solution} and\n\n\n{other_solution}"]
+    ConflictingSolutions {
+        solution: TImplWitness,
+        other_solution: TImplWitness,
+    },
+
+    #[message = "No solution for trait {trait_ty} found for {ty}"]
+    NoSolution {
+        ty: Id<TType>,
+        trait_ty: Id<TTraitType>,
+        #[span]
+        ty_span: Span,
+        #[span]
+        trait_ty_span: Span,
+    },
+
+    #[message = "Cannot determine the type `{ty}`"]
+    AmbiguousType {
+        ty: Id<TType>,
+        #[span]
+        use_span: Span,
+    },
+
+    #[message = "Cannot unify types `{left_ty}` and `{right_ty}`"]
+    CannotUnify {
+        left_ty: Id<TType>,
+        right_ty: Id<TType>,
+        #[span = "`{left_ty}`"]
+        left_span: Span,
+        #[span = "`{right_ty}`"]
+        right_span: Span,
+    },
+
+    #[message = "Cannot unify types `{left_trait_ty}` and `{right_trait_ty}`"]
+    CannotUnifyTraits {
+        left_trait_ty: Id<TTraitType>,
+        right_trait_ty: Id<TTraitType>,
+        #[span]
+        left_span: Span,
+        #[span]
+        right_span: Span,
+    },
+
+    #[message = "Cannot access member `{name}` for type `{ty}`"]
+    CannotAccess {
+        ty: Id<TType>,
+        name: Id<str>,
+        #[span]
+        span: Span,
+    },
+
+    #[message = "Cannot access member index {idx} for type `{ty}`"]
+    CannotAccessIdx {
+        ty: Id<TType>,
+        idx: usize,
+        #[span]
+        span: Span,
+    },
+
+    #[message = "Cannot determine the trait that provides method `{name}` for type `{call_ty}`"]
+    #[note = "You can try to elaborate the call type like `<{call_ty} as Trait>::{name}`"]
+    AmbiguousMethod {
+        call_ty: Id<TType>,
+        name: Id<str>,
+        #[span]
+        span: Span,
     },
 }
 

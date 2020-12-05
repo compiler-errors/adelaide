@@ -115,7 +115,7 @@ fn parse_message(message: LitStr) -> (LitStr, HashSet<Ident>) {
 
                 m = &m[j + 1..];
             } else {
-                panic!("Unterminated `{{`");
+                panic!("{}", "Unterminated `{{`");
             }
         } else {
             out += m;

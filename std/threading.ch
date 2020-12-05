@@ -36,7 +36,8 @@ impl Self for Thread {
   // Convenience function. Same as Thread::join, but explicitly downcast.
   // Panics if the joined value isn't the specified concrete type.
   fn join_as<T>(self) -> T = {
-    self:join():downcast()
+    //self:join():downcast()
+    todo()
   }.
 
   // Waits until all threads are finished. This is only allowed to be executed

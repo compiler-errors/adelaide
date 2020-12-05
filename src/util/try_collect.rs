@@ -1,4 +1,7 @@
-use std::collections::BTreeMap;
+use std::{
+    collections::{BTreeMap, HashMap},
+    hash::Hash,
+};
 
 pub trait TryCollectVec<T, E> {
     fn try_collect_vec(self) -> Result<Vec<T>, E>;
@@ -22,6 +25,19 @@ where
     I: Iterator<Item = Result<(K, V), E>>,
 {
     fn try_collect_btreemap(self) -> Result<BTreeMap<K, V>, E> {
+        self.collect()
+    }
+}
+
+pub trait TryCollectHashMap<K, V, E> {
+    fn try_collect_hashmap(self) -> Result<HashMap<K, V>, E>;
+}
+
+impl<I, K: Hash + Eq, V, E> TryCollectHashMap<K, V, E> for I
+where
+    I: Iterator<Item = Result<(K, V), E>>,
+{
+    fn try_collect_hashmap(self) -> Result<HashMap<K, V>, E> {
         self.collect()
     }
 }

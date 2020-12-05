@@ -6,12 +6,13 @@ use crate::{
         PEnum, PFunction, PGlobal, PImpl, PImplMember, PItem, PModule, PObject, PObjectMembers,
         PTrait, PTraitMember, PTraitTypeWithBindings, PType,
     },
-    util::{AError, AResult, Id, Intern, TryCollectVec},
+    util::{AError, AResult, Id, Intern, Pretty, TryCollectVec},
 };
 
 use super::{
-    ty::LTypeData, LEnum, LFunction, LGlobal, LImpl, LImplMethod, LMembers, LModule, LObject,
-    LScopeItem, LTrait, LTraitMethod, LTraitShape, LTraitTypeWithBindings, LType, LoweringContext,
+    fresh_id, ty::LTypeData, LEnum, LFunction, LGeneric, LGlobal, LImpl, LImplMethod, LMembers,
+    LModule, LObject, LScopeItem, LTrait, LTraitMethod, LTraitShape, LTraitTypeWithBindings, LType,
+    LoweringContext,
 };
 
 impl LoweringContext<'_> {
@@ -75,7 +76,7 @@ impl LoweringContext<'_> {
     }
 
     fn lower_global(&mut self, g: Id<PGlobal>) -> AResult<Id<LGlobal>> {
-        self.self_type = None;
+        self.self_ty = None;
 
         let PGlobal {
             span,
@@ -104,7 +105,7 @@ impl LoweringContext<'_> {
     }
 
     fn lower_function(&mut self, f: Id<PFunction>) -> AResult<Id<LFunction>> {
-        self.self_type = None;
+        self.self_ty = None;
 
         let PFunction {
             parent: _,
@@ -155,6 +156,8 @@ impl LoweringContext<'_> {
     }
 
     fn lower_object(&mut self, o: Id<PObject>) -> AResult<Id<LObject>> {
+        self.self_ty = None;
+
         let PObject {
             parent: _,
             is_structural,
@@ -172,7 +175,7 @@ impl LoweringContext<'_> {
             .map(|(s, g)| self.declare_generic(*g, *s))
             .try_collect_vec()?;
 
-        self.self_type = Some(
+        self.self_ty = Some(
             LType {
                 span: *span,
                 data: LTypeData::Object(
@@ -240,6 +243,8 @@ impl LoweringContext<'_> {
     }
 
     fn lower_enum(&mut self, e: Id<PEnum>) -> AResult<Id<LEnum>> {
+        self.self_ty = None;
+
         let PEnum {
             parent: _,
             span,
@@ -256,7 +261,7 @@ impl LoweringContext<'_> {
             .map(|(s, g)| self.declare_generic(*g, *s))
             .try_collect_vec()?;
 
-        self.self_type = Some(
+        self.self_ty = Some(
             LType {
                 span: *span,
                 data: LTypeData::Enum(
@@ -307,6 +312,8 @@ impl LoweringContext<'_> {
     }
 
     fn lower_trait(&mut self, t: Id<PTrait>) -> AResult<Id<LTrait>> {
+        self.self_ty = None;
+
         let PTrait {
             parent: _,
             span,
@@ -318,9 +325,14 @@ impl LoweringContext<'_> {
 
         self.enter_context(false, false);
 
-        self.self_type = Some(
+        let self_skolem = LGeneric {
+            id: fresh_id(),
+            name: format!("Self ({:?})", Pretty(name, self.ctx)).intern(self.ctx),
+            span: *span,
+        };
+        self.self_ty = Some(
             LType {
-                data: LTypeData::SelfType,
+                data: LTypeData::SelfSkolem(self_skolem),
                 span: *span,
             }
             .intern(self.ctx),
@@ -390,7 +402,7 @@ impl LoweringContext<'_> {
                             self.declare_variable(
                                 self.ctx.static_name("self"),
                                 *span,
-                                self.self_type.unwrap(),
+                                self.self_ty.unwrap(),
                             ),
                         );
                     }
@@ -422,6 +434,7 @@ impl LoweringContext<'_> {
             source: t,
             span: *span,
             name: *name,
+            self_skolem,
             generics: gs,
             restrictions: rs,
             types,
@@ -431,6 +444,8 @@ impl LoweringContext<'_> {
     }
 
     fn lower_impl(&mut self, i: Id<PImpl>) -> AResult<Id<LImpl>> {
+        self.self_ty = None;
+
         let PImpl {
             parent: _,
             span,
@@ -448,9 +463,11 @@ impl LoweringContext<'_> {
             .map(|(s, g)| self.declare_generic(*g, *s))
             .try_collect_vec()?;
 
+        self.self_ty = None;
+
         let ty = self.lower_ty(*ty, false, true)?;
 
-        self.self_type = Some(ty);
+        self.self_ty = Some(ty);
 
         let trait_ty = if let Some(trait_ty) = trait_ty {
             let trait_ty = self.lower_trait_ty(*trait_ty, false, true)?;
@@ -535,7 +552,7 @@ impl LoweringContext<'_> {
                             self.declare_variable(
                                 self.ctx.static_name("self"),
                                 *span,
-                                self.self_type.unwrap(),
+                                self.self_ty.unwrap(),
                             ),
                         );
                     }
@@ -607,10 +624,23 @@ impl LoweringContext<'_> {
             let LTraitShape {
                 types: expected_types,
                 methods: expected_methods,
+                method_generics: expected_method_generics,
             } = &*self.ctx.trait_shape(parent)?;
 
             compare(parent_name, "type", expected_types, &types, &seen)?;
             compare(parent_name, "method", expected_methods, &methods, &seen)?;
+
+            for (n, m) in &methods {
+                if m.generics.len() != expected_method_generics[n] {
+                    return Err(AError::ParityDisparity {
+                        kind: "method generics",
+                        expected: expected_method_generics[n],
+                        expected_span: expected_methods[n],
+                        given: m.generics.len(),
+                        given_span: m.span,
+                    });
+                }
+            }
         }
 
         Ok(LImpl {
@@ -645,14 +675,14 @@ impl LoweringContext<'_> {
 
     fn module_for_ty(&self, ty: Id<LType>) -> Option<Id<PModule>> {
         match &ty.lookup(self.ctx).data {
-            LTypeData::Infer(_) | LTypeData::Associated(_, _, _) => unreachable!(),
+            LTypeData::Infer(_) | LTypeData::Associated(_, _, _) | LTypeData::SelfSkolem(_) =>
+                unreachable!(),
             LTypeData::Generic(_)
             | LTypeData::Int
             | LTypeData::Float
             | LTypeData::Char
             | LTypeData::Bool
             | LTypeData::String
-            | LTypeData::SelfType
             | LTypeData::Never
             | LTypeData::Array(_)
             | LTypeData::Tuple(_)

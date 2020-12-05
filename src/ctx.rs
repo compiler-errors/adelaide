@@ -19,6 +19,7 @@ use crate::{
         PTrait, PTraitType, PTraitTypeWithBindings, PType, PUse,
     },
     read::{RawFile, RawFileSource},
+    typechecker::{TTraitType, TType},
     util::{AResult, Id, Intern, Opaque},
 };
 
@@ -54,8 +55,8 @@ pub trait AdelaideContext: salsa::Database {
 
     // ------ PARSER ------ //
 
-    #[salsa::invoke(crate::parser::parse_root)]
-    fn parse_root(&self) -> AResult<Id<PModule>>;
+    #[salsa::invoke(crate::parser::parse_program)]
+    fn parse_program(&self) -> AResult<Id<PModule>>;
 
     #[salsa::invoke(crate::parser::parse_std)]
     fn parse_std(&self) -> AResult<Id<PModule>>;
@@ -116,14 +117,20 @@ pub trait AdelaideContext: salsa::Database {
     #[salsa::invoke(crate::lowering::lower_pollstate_item)]
     fn lower_pollstate_item(&self) -> AResult<Id<LEnum>>;
 
+    #[salsa::invoke(crate::lowering::lower_awaitable_item)]
+    fn lower_awaitable_item(&self) -> AResult<Id<LObject>>;
+
     #[salsa::invoke(crate::lowering::std_item)]
     fn std_item(&self, name: &'static str) -> LScopeItem;
 
-    #[salsa::invoke(crate::lowering::lower_root)]
-    fn lower_root(&self) -> AResult<Id<LModule>>;
+    #[salsa::invoke(crate::lowering::lower_program)]
+    fn lower_program(&self) -> AResult<Id<LModule>>;
 
     #[salsa::invoke(crate::lowering::lower_mod)]
     fn lower_mod(&self, key: Id<PModule>) -> AResult<Id<LModule>>;
+
+    #[salsa::invoke(crate::lowering::lower_mods)]
+    fn lower_mods(&self) -> AResult<Arc<[Id<LModule>]>>;
 
     #[salsa::invoke(crate::lowering::lower_mod_base)]
     fn lower_mod_base(&self, key: Id<PModule>) -> AResult<Arc<LEarlyContext>>;
@@ -206,6 +213,28 @@ pub trait AdelaideContext: salsa::Database {
     #[salsa::invoke(crate::lowering::trait_shape)]
     fn trait_shape(&self, key: Id<PTrait>) -> AResult<Arc<LTraitShape>>;
 
+    // ------ TYPECHECKING ------ //
+
+    #[salsa::interned]
+    fn intern_ttype(&self, key: Arc<TType>) -> Id<TType>;
+
+    #[salsa::interned]
+    fn intern_ttraittype(&self, key: Arc<TTraitType>) -> Id<TTraitType>;
+
+    fn static_ty(&self, ty: &'static TType) -> Id<TType>;
+
+    #[salsa::invoke(crate::typechecker::get_impls_for_trait)]
+    fn get_impls_for_trait(&self, tr: Id<LTrait>) -> AResult<Arc<[Id<LImpl>]>>;
+
+    #[salsa::invoke(crate::typechecker::get_inherent_impls)]
+    fn get_inherent_impls(&self) -> AResult<Arc<[Id<LImpl>]>>;
+
+    #[salsa::invoke(crate::typechecker::get_traits_accessible_in_module)]
+    fn get_traits_accessible_in_module(&self, m: Id<LModule>) -> AResult<Arc<[Id<LTrait>]>>;
+
+    #[salsa::invoke(crate::typechecker::typecheck_program)]
+    fn typecheck_program(&self) -> AResult<()>;
+
     // ------ MONOMORPHIZATION ------ //
 
     // ...
@@ -213,6 +242,10 @@ pub trait AdelaideContext: salsa::Database {
 
 fn static_name(ctx: &dyn AdelaideContext, s: &'static str) -> Id<str> {
     s.intern(ctx)
+}
+
+fn static_ty(ctx: &dyn AdelaideContext, ty: &'static TType) -> Id<TType> {
+    ty.clone().intern(ctx)
 }
 
 // ------ File Stuff ------ //
@@ -229,14 +262,14 @@ fn line_start(ctx: &dyn AdelaideContext, id: Id<AFile>, idx: usize) -> Option<us
     let line_starts = ctx.line_starts(id);
 
     match idx.cmp(&line_starts.len()) {
-        Ordering::Less => line_starts.get(idx).cloned(),
+        Ordering::Less => line_starts.get(idx).copied(),
         Ordering::Equal => ctx.source(id).map(|f| f.as_ref().len()),
         Ordering::Greater => None,
     }
 }
 
 fn literal_module_children(ctx: &dyn AdelaideContext, file_id: Id<AFile>) -> Arc<[Id<AFile>]> {
-    file_id.lookup(ctx).children.values().cloned().collect()
+    file_id.lookup(ctx).children.values().copied().collect()
 }
 
 #[salsa::database(AdelaideStorage)]

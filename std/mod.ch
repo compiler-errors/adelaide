@@ -1,14 +1,11 @@
 use any::*.
 use lang::*.
-use operators::*.
 use iterator::*.
 use option::{*, Option::{None, Some}}.
-use try::*.
 use vector::*.
 use list::*.
 use hash_map::*.
 use threading::*.
-use asynchronous::*.
 
 extern fn gc().
 extern fn print(s: String).

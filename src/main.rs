@@ -1,7 +1,10 @@
 #![feature(once_cell)]
 #![feature(option_unwrap_none)]
 #![feature(hash_drain_filter)]
+#![feature(const_btree_new)]
+#![feature(const_mut_refs)]
 #![warn(clippy::pedantic)]
+#![deny(unused_must_use)]
 
 #[macro_use]
 extern crate maplit;
@@ -21,6 +24,7 @@ mod lexer;
 mod lowering;
 mod parser;
 mod read;
+mod typechecker;
 mod util;
 
 use clap::Clap;
@@ -104,17 +108,16 @@ fn try_main(ctx: &mut AdelaideDatabase) -> AResult<()> {
             ctx.lex_mod(ctx.mod_tree_root())?;
         },
         Mode::Parse => {
-            let m = ctx.parse_root()?;
+            let m = ctx.parse_program()?;
             stdoutln!("{:#?}", Pretty(m, ctx))?;
         },
         Mode::Lower => {
-            let l = ctx.lower_root()?;
+            let l = ctx.lower_program()?;
             stdoutln!("{:#?}", Pretty(l, ctx))?;
         },
         Mode::Typecheck => {
-            //ctx.typecheck_root()?;
-            //stdoutln!("Typechecked!")?;
-            todo!();
+            ctx.typecheck_program()?;
+            stdoutln!("Typechecked!")?;
         },
     }
 

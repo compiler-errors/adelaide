@@ -15,22 +15,44 @@ use std::{
 use crate::{
     ctx::AdelaideContext,
     lexer::Span,
-    parser::{PEnum, PFunction, PGlobal, PImpl, PModule, PObject, PTrait, PTraitMember},
-    util::{AError, AResult, Id, Intern, LId, LateLookup},
+    parser::{PEnum, PFunction, PGlobal, PImpl, PItem, PModule, PObject, PTrait, PTraitMember},
+    util::{AError, AResult, Id, Intern, LId, LateLookup, TryCollectVec},
 };
 
 pub use expr::{LExpression, LExpressionData, LStatement, LStatementData};
 pub use pattern::{LPattern, LPatternData};
-pub use ty::{LTraitType, LTraitTypeWithBindings, LType};
+pub use ty::{LTraitType, LTraitTypeWithBindings, LType, LTypeData};
 pub use uses::{
     early_lookup_ctx, local_mod_items, lookup_item, lookup_item_early, lower_mod_base, mod_items,
     LEarlyContext, LUseError, LUseItem, LUseResult,
 };
 
-use self::ty::LTypeData;
+pub fn lower_program(ctx: &dyn AdelaideContext) -> AResult<Id<LModule>> {
+    ctx.lower_mod(ctx.parse_program()?)
+}
 
-pub fn lower_root(ctx: &dyn AdelaideContext) -> AResult<Id<LModule>> {
-    ctx.lower_mod(ctx.parse_root()?)
+pub fn lower_mods(ctx: &dyn AdelaideContext) -> AResult<Arc<[Id<LModule>]>> {
+    fn get(ctx: &dyn AdelaideContext, key: Id<PModule>, out: &mut Vec<Id<PModule>>) {
+        out.push(key);
+
+        for i in &key.lookup(ctx).items {
+            match i {
+                PItem::Module(m) => {
+                    get(ctx, *m, out);
+                },
+                _ => {},
+            }
+        }
+    }
+
+    let mut out = vec![];
+    get(ctx, ctx.parse_program()?, &mut out);
+
+    Ok(out
+        .into_iter()
+        .map(|m| ctx.lower_mod(m))
+        .try_collect_vec()?
+        .into())
 }
 
 pub fn lower_mod(ctx: &dyn AdelaideContext, key: Id<PModule>) -> AResult<Id<LModule>> {
@@ -42,7 +64,7 @@ struct LoweringContext<'ctx> {
     ctx: &'ctx dyn AdelaideContext,
     base_items: Arc<HashMap<Id<str>, LScopeItem>>,
     scopes: Vec<FunctionScope>,
-    self_type: Option<Id<LType>>,
+    self_ty: Option<Id<LType>>,
 }
 
 impl<'ctx> LoweringContext<'ctx> {
@@ -57,7 +79,7 @@ impl<'ctx> LoweringContext<'ctx> {
             ctx,
             base_items,
             scopes: vec![],
-            self_type: None,
+            self_ty: None,
         })
     }
 
@@ -531,6 +553,7 @@ pub struct LTrait {
     pub parent: LId<LModule>,
     pub span: Span,
     pub name: Id<str>,
+    pub self_skolem: LGeneric,
     pub generics: Vec<LGeneric>,
     pub restrictions: Vec<(Id<LType>, Id<LTraitTypeWithBindings>)>,
     pub types: BTreeMap<Id<str>, Vec<Id<LTraitTypeWithBindings>>>,
@@ -827,12 +850,14 @@ pub fn enum_variant_span(ctx: &dyn AdelaideContext, e: Id<PEnum>, v: Id<str>) ->
 pub struct LTraitShape {
     types: HashMap<Id<str>, Span>,
     methods: HashMap<Id<str>, Span>,
+    method_generics: HashMap<Id<str>, usize>,
 }
 
 pub fn trait_shape(ctx: &dyn AdelaideContext, key: Id<PTrait>) -> AResult<Arc<LTraitShape>> {
     let mut seen = hashmap! {};
     let mut types = hashmap! {};
     let mut methods = hashmap! {};
+    let mut method_generics = hashmap! {};
 
     for m in &key.lookup(ctx).members {
         match m {
@@ -848,7 +873,12 @@ pub fn trait_shape(ctx: &dyn AdelaideContext, key: Id<PTrait>) -> AResult<Arc<LT
 
                 types.insert(*n, *s);
             },
-            PTraitMember::Function { span, name, .. } => {
+            PTraitMember::Function {
+                span,
+                name,
+                generics,
+                ..
+            } => {
                 if let Some(old_s) = seen.insert(*name, *span) {
                     return Err(AError::DuplicatedDefinition {
                         kind: "method",
@@ -859,11 +889,16 @@ pub fn trait_shape(ctx: &dyn AdelaideContext, key: Id<PTrait>) -> AResult<Arc<LT
                 }
 
                 methods.insert(*name, *span);
+                method_generics.insert(*name, generics.len());
             },
         }
     }
 
-    Ok(Arc::new(LTraitShape { types, methods }))
+    Ok(Arc::new(LTraitShape {
+        types,
+        methods,
+        method_generics,
+    }))
 }
 
 pub fn std_item(ctx: &dyn AdelaideContext, name: &'static str) -> LScopeItem {
@@ -892,6 +927,19 @@ pub fn lower_pollstate_item(ctx: &dyn AdelaideContext) -> AResult<Id<LEnum>> {
     }
 }
 
+pub fn lower_awaitable_item(ctx: &dyn AdelaideContext) -> AResult<Id<LObject>> {
+    if let LScopeItem::Object(e) = ctx
+        .mod_items(ctx.parse_std()?)?
+        .get(&ctx.static_name("Awaitable"))
+        .unwrap()
+    {
+        let lowered_e: LId<LObject> = (*e).into();
+        Ok(lowered_e.get(ctx))
+    } else {
+        unreachable!()
+    }
+}
+
 static IDS: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Debug, PrettyPrint)]
@@ -904,7 +952,7 @@ impl From<usize> for LoopId {
 }
 
 #[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Debug, PrettyPrint)]
-pub struct InferId(usize);
+pub struct InferId(pub usize);
 
 impl From<usize> for InferId {
     fn from(u: usize) -> Self {
@@ -922,7 +970,7 @@ impl From<usize> for VariableId {
 }
 
 #[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Debug, PrettyPrint)]
-pub struct GenericId(usize);
+pub struct GenericId(pub usize);
 
 impl From<usize> for GenericId {
     fn from(u: usize) -> Self {
