@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, iter::once};
 
 use crate::{
     lexer::Span,
@@ -236,7 +236,8 @@ impl Typechecker<'_> {
 
             if let Some(trait_ty) = trait_ty {
                 let trait_ty = trait_ty.lookup(self.ctx);
-                let trait_method_info = &trait_ty.0.lookup(self.ctx).methods[&info.name];
+                let trait_info = trait_ty.0.lookup(self.ctx);
+                let trait_method_info = &trait_info.methods[&info.name];
 
                 let fn_generics: Vec<_> = info
                     .generics
@@ -282,14 +283,16 @@ impl Typechecker<'_> {
 
                 // Finally, and definitely not least: Instantiate the
                 // restrictions "backwards" -- i.e., try to satisfy the impl fn
-                // restrictions given the trait fn generics.
+                // restrictions GIVEN the trait fn generics.
+                // This ensures that the restrictions on the functions are not
+                // more restrictive than the ones on the trait.
                 let rev_restrictions = self.initialize_restrictions(
-                    &trait_method_info.restrictions,
+                    &info.restrictions,
                     &info
                         .generics
                         .iter()
                         .zip_exact(&trait_method_info.generics)
-                        .map(|(g, ty)| (g.id, TType::Skolem(*ty).intern(self.ctx)))
+                        .map(|(g, ty)| (g.id, TType::MethodSkolem(i, *ty).intern(self.ctx)))
                         .collect(),
                 )?;
 

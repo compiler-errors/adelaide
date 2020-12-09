@@ -795,6 +795,7 @@ impl Typechecker<'_> {
             },
             TType::Skolem(_)
             | TType::AssociatedSkolem(..)
+            | TType::MethodSkolem(..)
             | TType::Int
             | TType::Float
             | TType::Char
@@ -881,6 +882,7 @@ impl Typechecker<'_> {
             },
             TType::AssociatedSkolem(_, _, _, _)
             | TType::Skolem(_)
+            | TType::MethodSkolem(..)
             | TType::Int
             | TType::Float
             | TType::Char
@@ -927,6 +929,7 @@ impl Typechecker<'_> {
             },
             TType::AssociatedSkolem(_, _, _, _)
             | TType::Skolem(_)
+            | TType::MethodSkolem(..)
             | TType::Int
             | TType::Float
             | TType::Char

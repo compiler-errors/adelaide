@@ -30,6 +30,10 @@ impl<It> Self for It where It: Iterator {
   fn limit(self, limit: Int) -> Limit<It> = Limit { remaining: limit, iterator: self }.
   fn zip<It2>(self, other: It2) -> Zip<It, It2> where It2: Iterator = Zip(self, other).
 
+  fn flat_map<F, OutIt>(self, fun: F) -> FlatMap<It, F, OutIt> where
+      F: Fn(<Self as Iterator>::Item) -> OutIt, OutIt: Iterable
+    = FlatMap { iterator: self, fun, sub_iterator: None }.
+
   fn collect<C>(self) -> C where C: FromIterator<<Self as Iterator>::Item> = {
     C::from_iterator(self)
   }.
@@ -186,6 +190,50 @@ impl<I1, I2> Iterator for Zip<I1, I2> where I1: Iterator, I2:Iterator {
   }.
 }
 
+struct FlatMap<It, F, OutIt> where OutIt: Iterable {
+  iterator: It,
+  fun: F,
+  sub_iterator: Option<<OutIt as Iterable>::Iterator>,
+}
+
+impl<It, F, OutIt> Iterator for FlatMap<It, F, OutIt> where
+    F: Fn(<It as Iterator>::Item) -> OutIt, It: Iterator, OutIt: Iterable {
+  type Item = <OutIt as Iterable>::Item.
+
+  fn next(self) -> (Option<<Self as Iterator>::Item>, Self) = {
+    let FlatMap { iterator, fun, sub_iterator } = self.
+
+    if let Some(sub_iterator) = sub_iterator {
+      if let (Some(sub_item), sub_iterator) = sub_iterator:next() {
+        return (Some(sub_item), FlatMap { iterator, fun, sub_iterator: Some(sub_iterator) }).
+      }
+    }
+
+    loop {
+      if let (Some(item), new_iterator) = iterator:next() {
+        iterator = new_iterator.
+        let sub_iterator = fun(item):iterator().
+
+        if let (Some(sub_item), sub_iterator) = sub_iterator:next() {
+          return (Some(sub_item), FlatMap { iterator, fun, sub_iterator: Some(sub_iterator) }).
+        }
+      } else {
+        break.
+      }
+    }
+
+    (None, FlatMap { iterator, fun, sub_iterator: None })
+  }.
+
+  fn has_next(self) -> Bool = {
+    todo()
+  }.
+
+  fn size_hint(self) -> Int = {
+    todo()
+  }.
+}
+
 impl<T> Iterable for [T] {
   type Iterator = ArrayIterator<T>.
   type Item = T.
@@ -300,5 +348,62 @@ impl FromIterator<Char> for String {
     }
 
     s
+  }.
+}
+
+struct OptionIterator<T>(Option<T>).
+
+impl<T> Iterable for Option<T> {
+  type Item = T.
+  type Iterator = OptionIterator<T>.
+
+  fn iterator(self) -> OptionIterator<T> = {
+    OptionIterator(self)
+  }.
+}
+
+impl<T> Iterator for OptionIterator<T> {
+  type Item = T.
+
+  fn next(self) -> (Option<T>, OptionIterator<T>) = {
+    (self:0, OptionIterator(None))
+  }.
+
+  fn has_next(self) -> Bool = {
+    self:0:is_some()
+  }.
+
+  fn size_hint(self) -> Int = {
+    if self:0:is_some() {
+      1
+    } else {
+      0
+    }
+  }.
+}
+
+struct Repeat<T>(T, Int).
+
+fn repeat<T>(t: T, times: Int) -> Repeat<T> = {
+  Repeat(t, times)
+}.
+
+impl<T> Iterator for Repeat<T> {
+  type Item = T.
+
+  fn next(self) -> (Option<T>, Repeat<T>) = {
+    if self:1 > 0 {
+      (Some(self:0), Repeat(self:0, self:1 - 1))
+    } else {
+      (None, self)
+    }
+  }.
+
+  fn has_next(self) -> Bool = {
+    self:1 > 0
+  }.
+
+  fn size_hint(self) -> Int = {
+    max(0, self:1)
   }.
 }

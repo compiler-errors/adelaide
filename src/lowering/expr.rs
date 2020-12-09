@@ -1087,6 +1087,25 @@ impl LoweringContext<'_> {
         throwable: Id<PExpression>,
     ) -> AResult<LExpressionData> {
         let throwable = self.lower_expr(throwable)?;
+        let throwable = LExpression {
+            source,
+            span,
+            data: self.std_static_call(
+                true,
+                self.fresh_infer_ty(span),
+                "IntoResult",
+                vec![],
+                "into_result",
+                vec![],
+                vec![throwable],
+                span,
+            ),
+        }
+        .intern(self.ctx);
+
+        if !self.scopes.last_mut().unwrap().return_allowed {
+            return Err(AError::IllegalReturn { span });
+        }
 
         let good_ty = self.fresh_infer_ty(span);
         let bad_ty = self.fresh_infer_ty(span);
@@ -1136,11 +1155,23 @@ impl LoweringContext<'_> {
         }
         .intern(self.ctx);
 
+        let bad_name = LPattern {
+            source: None,
+            span,
+            ty: Some(self.fresh_infer_ty(span)),
+            data: LPatternData::Variable(bad_var),
+        }
+        .intern(self.ctx);
         let bad_pattern = LPattern {
             source: None,
             span,
             ty: Some(self.fresh_infer_ty(span)),
-            data: LPatternData::Variable(good_var),
+            data: LPatternData::EnumVariantPattern(
+                result_enum.into(),
+                vec![good_ty, bad_ty],
+                self.ctx.static_name("Error"),
+                vec![bad_name],
+            ),
         }
         .intern(self.ctx);
         let bad_path = LExpression {
@@ -1150,7 +1181,21 @@ impl LoweringContext<'_> {
                 LExpression {
                     source,
                     span,
-                    data: LExpressionData::Variable(bad_var),
+                    data: self.std_static_call(
+                        false,
+                        self.fresh_infer_ty(span),
+                        "IntoResult",
+                        vec![],
+                        "from_error",
+                        vec![],
+                        vec![LExpression {
+                            source,
+                            span,
+                            data: LExpressionData::Variable(bad_var),
+                        }
+                        .intern(self.ctx)],
+                        span,
+                    ),
                 }
                 .intern(self.ctx),
             ),

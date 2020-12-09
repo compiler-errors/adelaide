@@ -198,6 +198,18 @@ impl<K, V> Iterator for HashMapIterator<K, V> {
   }.
 }
 
+impl<K, V> FromIterator<(K, V)> for HashMap<K, V> where K: Equals<K> + Hash {
+  fn from_iterator<It>(it: It) -> Self where It: Iterator<Item=(K, V)> = {
+    let map = HashMap::new().
+
+    for (k, v) in it {
+      map[k] = v.
+    }
+
+    map
+  }.
+}
+
 impl<K, V> Into<String> for HashMap<K, V> where K: Into<String>, V: Into<String> {
   fn into(self) -> String = {
     let s = "HashMap{".

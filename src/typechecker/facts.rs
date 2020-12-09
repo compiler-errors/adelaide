@@ -1,12 +1,13 @@
 use std::{
     collections::{BTreeMap, HashMap},
+    iter::once,
     sync::Arc,
 };
 
 use crate::{
     lexer::Span,
-    lowering::{fresh_id, LModule, LTrait},
-    util::{AResult, Id, Intern, Pretty, TryCollectBTreeMap},
+    lowering::{fresh_id, GenericId, LModule, LTrait},
+    util::{AResult, Id, Intern, Pretty, TryCollectBTreeMap, ZipExact},
 };
 
 use super::{
@@ -114,10 +115,46 @@ impl Typechecker<'_> {
             // Assume the restrictions of the trait itself
             self.assume_restrictions(new_facts, restrictions)?;
 
+            let self_ty = self.initialize_ty(info.ty, &btreemap! {})?;
+            let trait_ty = info
+                .trait_ty
+                .map(|trait_ty| self.initialize_trait_ty(trait_ty, &btreemap! {}))
+                .transpose()?;
+
             for method in info.methods.values() {
                 let restrictions =
                     self.initialize_restrictions(&method.restrictions, &btreemap! {})?;
+
                 self.assume_restrictions(new_facts, restrictions)?;
+
+                // Assume the trait method's facts, but for a separate MethodSkolem so we don't
+                // have conflicts
+                if let Some(trait_ty) = trait_ty {
+                    let trait_info = trait_ty.lookup(self.ctx).0.lookup(self.ctx);
+                    let trait_method_info = &trait_info.methods[&method.name];
+
+                    let substitutions = Iterator::chain(
+                        // Instantiate the trait like normal
+                        trait_info
+                            .generics
+                            .iter()
+                            .zip_exact(trait_ty.lookup(self.ctx).1.iter())
+                            .map(|(g, ty)| (g.id, *ty))
+                            // Don't forget Self (:
+                            .chain(once((trait_info.self_skolem.id, self_ty))),
+                        // Method generics are mapped to MethodSkolems
+                        trait_method_info
+                            .generics
+                            .iter()
+                            .map(|g| (g.id, TType::MethodSkolem(*i, *g).intern(self.ctx))),
+                    )
+                    .collect();
+
+                    let restrictions = self
+                        .initialize_restrictions(&trait_method_info.restrictions, &substitutions)?;
+
+                    self.assume_restrictions(new_facts, restrictions)?;
+                }
             }
         }
 

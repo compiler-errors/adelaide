@@ -6,8 +6,8 @@ use crate::{
     ctx::AdelaideContext,
     lexer::Span,
     lowering::{
-        GenericId, InferId, LEnum, LGeneric, LObject, LTrait, LTraitType, LTraitTypeWithBindings,
-        LType, LTypeData,
+        GenericId, InferId, LEnum, LGeneric, LImpl, LObject, LTrait, LTraitType,
+        LTraitTypeWithBindings, LType, LTypeData,
     },
     util::{
         AError, AResult, Id, Intern, Pretty, PrettyPrint, TryCollectBTreeMap, TryCollectVec,
@@ -22,6 +22,7 @@ pub const UNIT_TYPE: &'static TType = &TType::Tuple(vec![]);
 #[derive(Debug, Hash, Eq, PartialEq, Clone, Lookup)]
 pub enum TType {
     Skolem(LGeneric),
+    MethodSkolem(Id<LImpl>, LGeneric),
     GenericInfer(InferId),
     Infer(InferId),
     AssociatedSkolem(InferId, Id<TType>, Id<TTraitType>, Id<str>),
@@ -502,7 +503,8 @@ impl Typechecker<'_> {
             | TType::Bool
             | TType::String
             | TType::Never
-            | TType::Skolem(_) => ty,
+            | TType::Skolem(_)
+            | TType::MethodSkolem(..) => ty,
             // Attempt to deref an infer (TODO: loop detection)
             TType::AssociatedSkolem(id, ..) =>
                 if let Some(ty) = self.get_infer(*id, span)? {
@@ -596,6 +598,7 @@ impl Typechecker<'_> {
     pub fn is_concrete_ty(&self, ty: Id<TType>) -> bool {
         match &*ty.lookup(self.ctx) {
             TType::Skolem(_)
+            | TType::MethodSkolem(..)
             | TType::AssociatedSkolem(..)
             | TType::Int
             | TType::Float
@@ -630,7 +633,7 @@ impl Typechecker<'_> {
 impl PrettyPrint for TType {
     fn fmt(&self, f: &mut std::fmt::Formatter, ctx: &dyn AdelaideContext) -> std::fmt::Result {
         match self {
-            TType::Skolem(id) => {
+            TType::Skolem(id) | TType::MethodSkolem(_, id) => {
                 write!(f, "{:?}{}", Pretty(id.name, ctx), id.id.0)?;
             },
             TType::AssociatedSkolem(id, ty, trait_ty, name) => {

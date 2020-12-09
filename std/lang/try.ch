@@ -43,4 +43,3 @@ impl<T> IntoResult for Option<T> {
   fn from_ok(t: T) -> Option<T> = Some(t).
   fn from_error(e: ()) -> Option<T> = None.
 }
-
