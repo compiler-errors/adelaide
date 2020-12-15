@@ -472,6 +472,12 @@ impl LoweringContext<'_> {
         let trait_ty = if let Some(trait_ty) = trait_ty {
             let trait_ty = self.lower_trait_ty(*trait_ty, false, true)?;
 
+            if LScopeItem::Trait(trait_ty.lookup(self.ctx).tr.source())
+                == self.ctx.std_item("Concrete")
+            {
+                return Err(AError::CannotImplementConcrete { span: *span });
+            }
+
             let trait_mod = trait_ty
                 .lookup(self.ctx)
                 .tr
@@ -624,19 +630,29 @@ impl LoweringContext<'_> {
             let LTraitShape {
                 types: expected_types,
                 methods: expected_methods,
-                method_generics: expected_method_generics,
+                method_generics_and_parameters: expected_method_generics,
             } = &*self.ctx.trait_shape(parent)?;
 
             compare(parent_name, "type", expected_types, &types, &seen)?;
             compare(parent_name, "method", expected_methods, &methods, &seen)?;
 
             for (n, m) in &methods {
-                if m.generics.len() != expected_method_generics[n] {
+                if m.generics.len() != expected_method_generics[n].0 {
                     return Err(AError::ParityDisparity {
                         kind: "method generics",
-                        expected: expected_method_generics[n],
+                        expected: expected_method_generics[n].0,
                         expected_span: expected_methods[n],
                         given: m.generics.len(),
+                        given_span: m.span,
+                    });
+                }
+
+                if m.parameters.len() != expected_method_generics[n].1 {
+                    return Err(AError::ParityDisparity {
+                        kind: "parameters",
+                        expected: expected_method_generics[n].1,
+                        expected_span: expected_methods[n],
+                        given: m.parameters.len(),
                         given_span: m.span,
                     });
                 }

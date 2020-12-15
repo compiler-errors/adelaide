@@ -42,7 +42,7 @@ pub fn get_traits_accessible_in_module(
     m: Id<LModule>,
 ) -> AResult<Arc<[Id<LTrait>]>> {
     Ok(ctx
-        .mod_items(m.lookup(ctx).parent.source())?
+        .mod_items(m.lookup(ctx).source)?
         .values()
         .flat_map(|i| match i {
             LScopeItem::Trait(t) => {

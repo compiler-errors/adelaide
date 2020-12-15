@@ -8,7 +8,7 @@ use crate::{
 
 use super::{
     ty::{UnifyMode, UNIT_TYPE},
-    TTraitType, TType, Typechecker,
+    TType, Typechecker,
 };
 
 impl Typechecker<'_> {
@@ -61,7 +61,7 @@ impl Typechecker<'_> {
                 let (param_tys, return_ty, restrictions) =
                     self.instantiate_function(f.get(self.ctx), &gs)?;
 
-                self.satisfy_instantiated_restrictions(restrictions)?;
+                self.satisfy_instantiated_restrictions(restrictions, *span)?;
 
                 TType::FnPtr(param_tys, return_ty).intern(self.ctx)
             },
@@ -84,7 +84,7 @@ impl Typechecker<'_> {
                     )?;
                 }
 
-                self.satisfy_instantiated_restrictions(restrictions)?;
+                self.satisfy_instantiated_restrictions(restrictions, *span)?;
 
                 return_ty
             },
@@ -261,7 +261,7 @@ impl Typechecker<'_> {
                     )?;
                 }
 
-                self.satisfy_instantiated_restrictions(restrictions)?;
+                self.satisfy_instantiated_restrictions(restrictions, *span)?;
 
                 object_ty
             },
@@ -283,7 +283,7 @@ impl Typechecker<'_> {
                     )?;
                 }
 
-                self.satisfy_instantiated_restrictions(restrictions)?;
+                self.satisfy_instantiated_restrictions(restrictions, *span)?;
 
                 enum_ty
             },
@@ -515,7 +515,7 @@ impl Typechecker<'_> {
                     )?;
                 }
 
-                self.satisfy_instantiated_restrictions(restrictions)?;
+                self.satisfy_instantiated_restrictions(restrictions, *span)?;
 
                 object_ty
             },
@@ -537,7 +537,7 @@ impl Typechecker<'_> {
                     )?;
                 }
 
-                self.satisfy_instantiated_restrictions(restrictions)?;
+                self.satisfy_instantiated_restrictions(restrictions, *span)?;
 
                 enum_ty
             },

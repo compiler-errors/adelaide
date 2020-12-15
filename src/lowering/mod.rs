@@ -850,7 +850,7 @@ pub fn enum_variant_span(ctx: &dyn AdelaideContext, e: Id<PEnum>, v: Id<str>) ->
 pub struct LTraitShape {
     types: HashMap<Id<str>, Span>,
     methods: HashMap<Id<str>, Span>,
-    method_generics: HashMap<Id<str>, usize>,
+    method_generics_and_parameters: HashMap<Id<str>, (usize, usize)>,
 }
 
 pub fn trait_shape(ctx: &dyn AdelaideContext, key: Id<PTrait>) -> AResult<Arc<LTraitShape>> {
@@ -877,6 +877,8 @@ pub fn trait_shape(ctx: &dyn AdelaideContext, key: Id<PTrait>) -> AResult<Arc<LT
                 span,
                 name,
                 generics,
+                parameters,
+                has_self,
                 ..
             } => {
                 if let Some(old_s) = seen.insert(*name, *span) {
@@ -889,7 +891,13 @@ pub fn trait_shape(ctx: &dyn AdelaideContext, key: Id<PTrait>) -> AResult<Arc<LT
                 }
 
                 methods.insert(*name, *span);
-                method_generics.insert(*name, generics.len());
+                method_generics.insert(
+                    *name,
+                    (
+                        generics.len(),
+                        parameters.len() + if has_self.is_some() { 1 } else { 0 },
+                    ),
+                );
             },
         }
     }
@@ -897,7 +905,7 @@ pub fn trait_shape(ctx: &dyn AdelaideContext, key: Id<PTrait>) -> AResult<Arc<LT
     Ok(Arc::new(LTraitShape {
         types,
         methods,
-        method_generics,
+        method_generics_and_parameters: method_generics,
     }))
 }
 
@@ -934,6 +942,32 @@ pub fn lower_awaitable_item(ctx: &dyn AdelaideContext) -> AResult<Id<LObject>> {
         .unwrap()
     {
         let lowered_e: LId<LObject> = (*e).into();
+        Ok(lowered_e.get(ctx))
+    } else {
+        unreachable!()
+    }
+}
+
+pub fn lower_concrete_item(ctx: &dyn AdelaideContext) -> AResult<Id<LTrait>> {
+    if let LScopeItem::Trait(e) = ctx
+        .mod_items(ctx.parse_std()?)?
+        .get(&ctx.static_name("Concrete"))
+        .unwrap()
+    {
+        let lowered_e: LId<LTrait> = (*e).into();
+        Ok(lowered_e.get(ctx))
+    } else {
+        unreachable!()
+    }
+}
+
+pub fn lower_into_item(ctx: &dyn AdelaideContext) -> AResult<Id<LTrait>> {
+    if let LScopeItem::Trait(e) = ctx
+        .mod_items(ctx.parse_std()?)?
+        .get(&ctx.static_name("Into"))
+        .unwrap()
+    {
+        let lowered_e: LId<LTrait> = (*e).into();
         Ok(lowered_e.get(ctx))
     } else {
         unreachable!()

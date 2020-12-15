@@ -202,6 +202,13 @@ pub enum AError {
         span: Span,
     },
 
+    #[message = "Cannot implement trait `Concrete`."]
+    #[note = "Trait is automatically implemented for types that are not `Dyn`."]
+    CannotImplementConcrete {
+        #[span]
+        span: Span,
+    },
+
     #[message = "No such method `{name}` in trait `{trait_name}`"]
     NoMethod {
         trait_name: Id<str>,
@@ -455,6 +462,26 @@ pub enum AError {
         name: Id<str>,
         #[span]
         span: Span,
+    },
+
+    #[message = "The trait `{trait_name}` is not object-safe due to method `{method_name}`"]
+    NotObjectSafeMethod {
+        trait_name: Id<str>,
+        method_name: Id<str>,
+        #[span = "This method must be object-safe, try adding `where Self: Concrete`"]
+        method_span: Span,
+        #[span = "Required to be object-safe due to..."]
+        use_span: Span,
+    },
+
+    #[message = "The trait `{trait_name}` is not object-safe due to its referencing type `{ty}`"]
+    NotObjectSafeType {
+        trait_name: Id<str>,
+        ty: Id<TType>,
+        #[span = "This type is not object-safe"]
+        def_span: Span,
+        #[span = "Required to be object-safe due to..."]
+        use_span: Span,
     },
 }
 

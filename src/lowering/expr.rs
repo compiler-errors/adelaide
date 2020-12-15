@@ -460,6 +460,17 @@ impl LoweringContext<'_> {
                     ..
                 } = &*c.lookup(self.ctx)
                 {
+                    let fn_info = f.source().lookup(self.ctx);
+                    if ps.len() != fn_info.parameters.len() {
+                        return Err(AError::ParityDisparity {
+                            kind: "arguments",
+                            expected: fn_info.parameters.len(),
+                            expected_span: fn_info.span,
+                            given: ps.len(),
+                            given_span: *span,
+                        });
+                    }
+
                     LExpressionData::Call(f.clone(), g.clone(), ps)
                 } else {
                     let ps = LExpression {
@@ -503,10 +514,20 @@ impl LoweringContext<'_> {
                     let gs = self.check_generics_parity(
                         gs,
                         *span,
-                        shape.method_generics[n],
+                        shape.method_generics_and_parameters[n].0,
                         shape.methods[n],
                         true,
                     )?;
+
+                    if ps.len() != shape.method_generics_and_parameters[n].1 {
+                        return Err(AError::ParityDisparity {
+                            kind: "arguments",
+                            expected: shape.method_generics_and_parameters[n].1,
+                            expected_span: shape.methods[n],
+                            given: ps.len(),
+                            given_span: *span,
+                        });
+                    }
 
                     LExpressionData::StaticCall(
                         false,

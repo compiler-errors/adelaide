@@ -114,12 +114,6 @@ pub trait AdelaideContext: salsa::Database {
 
     // ------ LOWERING ------ //
 
-    #[salsa::invoke(crate::lowering::lower_pollstate_item)]
-    fn lower_pollstate_item(&self) -> AResult<Id<LEnum>>;
-
-    #[salsa::invoke(crate::lowering::lower_awaitable_item)]
-    fn lower_awaitable_item(&self) -> AResult<Id<LObject>>;
-
     #[salsa::invoke(crate::lowering::std_item)]
     fn std_item(&self, name: &'static str) -> LScopeItem;
 
@@ -212,6 +206,20 @@ pub trait AdelaideContext: salsa::Database {
 
     #[salsa::invoke(crate::lowering::trait_shape)]
     fn trait_shape(&self, key: Id<PTrait>) -> AResult<Arc<LTraitShape>>;
+
+    // ------ LOWERING CONVENIENCE METHODS ------ //
+
+    #[salsa::invoke(crate::lowering::lower_pollstate_item)]
+    fn lower_pollstate_item(&self) -> AResult<Id<LEnum>>;
+
+    #[salsa::invoke(crate::lowering::lower_awaitable_item)]
+    fn lower_awaitable_item(&self) -> AResult<Id<LObject>>;
+
+    #[salsa::invoke(crate::lowering::lower_concrete_item)]
+    fn lower_concrete_item(&self) -> AResult<Id<LTrait>>;
+
+    #[salsa::invoke(crate::lowering::lower_into_item)]
+    fn lower_into_item(&self) -> AResult<Id<LTrait>>;
 
     // ------ TYPECHECKING ------ //
 

@@ -14,8 +14,8 @@ use std::{
 use crate::{
     ctx::AdelaideContext,
     lexer::Span,
-    lowering::{InferId, LExpression, LModule, LoopId, VariableId},
-    util::{AError, AResult, Id, TryCollectBTreeMap, TryCollectHashMap},
+    lowering::{InferId, LExpression, LModule, LTrait, LoopId, VariableId},
+    util::{AError, AResult, Id, TryCollectBTreeMap},
 };
 
 use self::facts::TFacts;
@@ -49,6 +49,7 @@ struct Typechecker<'ctx> {
     epochs: Vec<TEpoch>,
 
     solved: HashMap<TGoal, (TImplWitness, Span)>,
+    object_safe_traits: HashSet<Id<LTrait>>,
     function_generics: HashMap<Id<LExpression>, Vec<Id<TType>>>,
     trait_generics: HashMap<Id<LExpression>, Vec<Id<TType>>>,
 }
@@ -66,7 +67,9 @@ impl<'ctx> Typechecker<'ctx> {
             loop_tys: hashmap! {},
 
             epochs: vec![],
+
             solved: hashmap! {},
+            object_safe_traits: hashset! {},
             function_generics: hashmap! {},
             trait_generics: hashmap! {},
         }
@@ -145,6 +148,20 @@ impl<'ctx> Typechecker<'ctx> {
                                 .try_collect_btreemap()?,
                         ),
                     ),
+                TImplWitness::DynamicCoersion(ty, TTraitTypeWithBindings(trait_ty, bindings)) =>
+                    TImplWitness::DynamicCoersion(
+                        self.normalize_ty(ty, span)?,
+                        TTraitTypeWithBindings(
+                            self.normalize_trait_ty(trait_ty, span)?,
+                            bindings
+                                .into_iter()
+                                .map(|(n, ty)| -> AResult<_> {
+                                    Ok((n, self.normalize_ty(ty, span)?))
+                                })
+                                .try_collect_btreemap()?,
+                        ),
+                    ),
+                TImplWitness::Concrete => TImplWitness::Concrete,
             };
 
             if let Some((other_witness, _)) = solved.get(&goal) {

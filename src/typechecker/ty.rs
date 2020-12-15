@@ -215,20 +215,18 @@ impl Typechecker<'_> {
         restrictions
             .iter()
             .map(|(ty, trait_ty)| -> AResult<_> {
-                let ty_span = ty.lookup(self.ctx).span;
-                let lty = self.initialize_ty(*ty, substitutions)?;
+                let ty = self.initialize_ty(*ty, substitutions)?;
 
-                let tr_span = trait_ty.lookup(self.ctx).span;
                 let trait_ty = self.initialize_trait_ty_with_bindings(*trait_ty, substitutions)?;
 
                 debug!(
                     "Instantiated {:?} requires {:?}",
-                    Pretty(lty, self.ctx),
+                    Pretty(ty, self.ctx),
                     Pretty(&trait_ty, self.ctx)
                 );
 
                 // TODO: use better spans here lol
-                Ok(TRestriction(lty, ty_span, trait_ty, tr_span))
+                Ok(TRestriction(ty, trait_ty))
             })
             .try_collect_vec()
     }

@@ -5,7 +5,7 @@ use either::Either;
 use crate::{
     ctx::AdelaideContext,
     lexer::Span,
-    lowering::{fresh_id, GenericId, InferId, LExpression, LImpl, LMembers, LTrait},
+    lowering::{fresh_id, GenericId, InferId, LExpression, LImpl, LMembers, LTrait, LTypeData},
     util::{AError, AResult, Id, Intern, Pretty, PrettyPrint, TryCollectBTreeMap, ZipExact},
 };
 
@@ -20,13 +20,16 @@ pub enum TImplWitness {
     Impl(Id<LImpl>, BTreeMap<GenericId, Id<TType>>),
     Assumption(Id<LTrait>, Id<TType>, Id<TTraitType>),
     Dynamic(Id<TType>, TTraitTypeWithBindings),
+    DynamicCoersion(Id<TType>, TTraitTypeWithBindings),
+    Concrete,
 }
 
 impl PrettyPrint for TImplWitness {
     fn fmt(&self, f: &mut std::fmt::Formatter, ctx: &dyn AdelaideContext) -> std::fmt::Result {
         match self {
-            TImplWitness::Impl(imp, gs) => {
+            TImplWitness::Impl(imp, _) => {
                 let info = imp.lookup(ctx);
+
                 if let Some(trait_ty) = info.trait_ty {
                     write!(
                         f,
@@ -35,18 +38,36 @@ impl PrettyPrint for TImplWitness {
                         Pretty(info.ty, ctx)
                     )?;
                 } else {
-                    write!(f, "impl Self for {:?}", Pretty(info.ty, ctx))?;
+                    write!(f, "[impl Self for {:?}]", Pretty(info.ty, ctx))?;
                 }
             },
-            TImplWitness::Assumption(a, b, c) => {
+            TImplWitness::Assumption(_, ty, trait_ty) => {
                 write!(
                     f,
-                    "[builtin assumption, impl {:?} for {:?}]",
-                    Pretty(c, ctx),
-                    Pretty(b, ctx)
+                    "[assumption, impl {:?} for {:?}]",
+                    Pretty(trait_ty, ctx),
+                    Pretty(ty, ctx)
                 )?;
             },
-            TImplWitness::Dynamic(_, _) => {},
+            TImplWitness::Dynamic(ty, trait_ty) => {
+                write!(
+                    f,
+                    "[automatic impl {:?} for {:?}]",
+                    Pretty(trait_ty, ctx),
+                    Pretty(ty, ctx)
+                )?;
+            },
+            TImplWitness::Concrete => {
+                write!(f, "[automatic impl Concrete]")?;
+            },
+            TImplWitness::DynamicCoersion(ty, trait_ty) => {
+                write!(
+                    f,
+                    "[automatic impl Into<Dyn<{:?}>> for {:?}]",
+                    Pretty(trait_ty, ctx),
+                    Pretty(ty, ctx)
+                )?;
+            },
         }
 
         Ok(())
@@ -107,6 +128,125 @@ impl Typechecker<'_> {
 
         let mut solution_and_epoch = None;
 
+        let tr = trait_ty.lookup(self.ctx).0;
+
+        // Concrete implementation
+        if tr == self.ctx.lower_concrete_item()? {
+            match &*ty.lookup(self.ctx) {
+                TType::Infer(_)
+                | TType::GenericInfer(_)
+                | TType::Associated(_, _, _)
+                | TType::ObjectAccess(_, _) => {
+                    if !ambiguous_ok {
+                        self.set_ambiguity(AError::AmbiguousType {
+                            ty,
+                            use_span: ty_span,
+                        });
+                    }
+
+                    return Ok(None);
+                },
+                TType::Skolem(_)
+                | TType::MethodSkolem(_, _)
+                | TType::AssociatedSkolem(_, _, _, _) => {
+                    // Actually, we don't know!
+                },
+                TType::Int
+                | TType::Float
+                | TType::Char
+                | TType::Bool
+                | TType::String
+                | TType::Never
+                | TType::Array(_)
+                | TType::Tuple(_)
+                | TType::Closure(_, _)
+                | TType::FnPtr(_, _)
+                | TType::Object(_, _)
+                | TType::Enum(_, _) => {
+                    debug!(
+                        "{}!!We proved goal {:?} implements {:?}",
+                        "  ".repeat(self.epochs.len() - 1),
+                        Pretty(ty, self.ctx),
+                        Pretty(trait_ty, self.ctx)
+                    );
+
+                    self.epoch().progress = true;
+
+                    self.solved.insert(goal, (TImplWitness::Concrete, ty_span));
+                    return Ok(Some(TImplWitness::Concrete));
+                },
+                TType::Dynamic(_) => {
+                    return Err(AError::NoSolution {
+                        ty,
+                        ty_span,
+                        trait_ty,
+                        trait_ty_span,
+                    });
+                },
+            }
+        }
+
+        if tr == self.ctx.lower_into_item()? {
+            let into_ty = trait_ty.lookup(self.ctx).1[0];
+
+            match &*into_ty.lookup(self.ctx) {
+                TType::Infer(_)
+                | TType::GenericInfer(_)
+                | TType::Associated(_, _, _)
+                | TType::ObjectAccess(_, _) => {
+                    if !ambiguous_ok {
+                        self.set_ambiguity(AError::AmbiguousType {
+                            ty,
+                            use_span: ty_span,
+                        });
+                    }
+
+                    return Ok(None);
+                },
+                TType::Dynamic(dyn_trait_ty) => {
+                    let result = self.in_epoch(goal.clone(), |self_| {
+                        self_.do_goal_restriction(
+                            TRestriction(ty, dyn_trait_ty.clone()),
+                            &hashset! {},
+                            ty_span,
+                        )?;
+                        Ok(TImplWitness::DynamicCoersion(ty, dyn_trait_ty.clone()))
+                    });
+
+                    if let Ok((new_solution, new_epoch)) = result {
+                        if let Some(ambiguity) = new_epoch.ambiguity {
+                            if !ambiguous_ok {
+                                self.set_ambiguity(ambiguity);
+                            }
+
+                            return Ok(None);
+                        }
+
+                        if !merge_solution(
+                            is_concrete,
+                            &mut solution_and_epoch,
+                            new_solution,
+                            new_epoch,
+                        )? {
+                            if !ambiguous_ok {
+                                self.set_ambiguity(AError::NoSolution {
+                                    ty,
+                                    ty_span,
+                                    trait_ty,
+                                    trait_ty_span,
+                                });
+                            }
+
+                            return Ok(None);
+                        }
+                    }
+                },
+                _ => {
+                    // Not trying to look for Into<Dyn<_>>
+                },
+            }
+        }
+
         if let TType::Dynamic(dyn_trait_ty) = &*ty.lookup(self.ctx) {
             let result = self.in_epoch(goal.clone(), |self_| {
                 let trait_ty = self_.unify_trait_ty(
@@ -151,8 +291,6 @@ impl Typechecker<'_> {
                 }
             }
         }
-
-        let tr = trait_ty.lookup(self.ctx).0;
 
         for id in &*self.ctx.get_impls_for_trait(tr)? {
             let result = self.in_epoch(goal.clone(), move |self_| {
@@ -204,10 +342,8 @@ impl Typechecker<'_> {
         }
 
         if let Some(facts) = self.type_facts.clone() {
-            for (
-                (assumed_tr, assumed_ty, assumed_trait_ty),
-                (_, assumed_ty_span, assume_trait_ty_span),
-            ) in &facts.assumptions
+            for ((assumed_tr, assumed_ty, assumed_trait_ty), (_, assumed_span)) in
+                &facts.assumptions
             {
                 if *assumed_tr != tr {
                     continue;
@@ -217,14 +353,14 @@ impl Typechecker<'_> {
                     let _ = self_.unify_ty(
                         UnifyMode::GenericInference(&hashset! {}),
                         *assumed_ty,
-                        *assumed_ty_span,
+                        *assumed_span,
                         ty,
                         ty_span,
                     )?;
                     let _ = self_.unify_trait_ty(
                         UnifyMode::GenericInference(&hashset! {}),
                         *assumed_trait_ty,
-                        *assume_trait_ty_span,
+                        *assumed_span,
                         trait_ty,
                         trait_ty_span,
                     )?;
@@ -295,7 +431,7 @@ impl Typechecker<'_> {
         &mut self,
         id: Id<LImpl>,
         ty: Id<TType>,
-        ty_span: Span,
+        span: Span,
         maybe_trait: Option<(Id<TTraitType>, Span)>,
     ) -> AResult<Option<TImplWitness>> {
         let info = id.lookup(self.ctx);
@@ -307,7 +443,7 @@ impl Typechecker<'_> {
             let id = fresh_id();
             allowed.insert(id);
             substitutions.insert(g.id, TType::GenericInfer(id).intern(self.ctx));
-            self.infer_spans.insert(id, ty_span);
+            self.infer_spans.insert(id, span);
         }
 
         let impl_ty = self.initialize_ty(info.ty, &substitutions)?;
@@ -324,7 +460,7 @@ impl Typechecker<'_> {
             impl_ty,
             info.span,
             ty,
-            ty_span,
+            span,
         )?;
 
         if let Some((trait_ty, trait_ty_span)) = maybe_trait {
@@ -350,14 +486,14 @@ impl Typechecker<'_> {
         }
 
         for restriction in self.initialize_restrictions(&info.restrictions, &substitutions)? {
-            self.do_goal_restriction(restriction, &allowed)?;
+            self.do_goal_restriction(restriction, &allowed, span)?;
         }
 
         for ty in substitutions.values() {
-            if let TType::GenericInfer(id) = &*self.normalize_ty(*ty, ty_span)?.lookup(self.ctx) {
+            if let TType::GenericInfer(id) = &*self.normalize_ty(*ty, span)?.lookup(self.ctx) {
                 if allowed.contains(id) {
                     self.set_ambiguity(AError::AmbiguousType {
-                        use_span: ty_span,
+                        use_span: span,
                         ty: *ty,
                     });
                     return Ok(None);
@@ -367,7 +503,7 @@ impl Typechecker<'_> {
 
         let substitutions = substitutions
             .into_iter()
-            .map(|(g, ty)| -> AResult<_> { Ok((g, self.normalize_ty(ty, ty_span)?)) })
+            .map(|(g, ty)| -> AResult<_> { Ok((g, self.normalize_ty(ty, span)?)) })
             .try_collect_btreemap()?;
 
         debug!("Mapping = {:?}", Pretty(&substitutions, self.ctx));
@@ -601,17 +737,27 @@ impl Typechecker<'_> {
             .ctx
             .get_traits_accessible_in_module(self.module.unwrap())?
         {
+            debug!(
+                "Trying trait {:?}",
+                Pretty(tr.lookup(self.ctx).name, self.ctx)
+            );
+
             match tr.lookup(self.ctx).methods.get(&name) {
                 None => {
                     continue;
                 },
                 Some(method) if has_self && !method.has_self => {
+                    debug!(
+                        "Skipping because has_self={}, method.has_self={}",
+                        has_self, method.has_self
+                    );
                     continue;
                 },
                 _ => {},
             }
 
             if let Some(_) = candidate_tr {
+                debug!("Candidate conflicted");
                 return Err(AError::AmbiguousMethod {
                     call_ty,
                     name,
@@ -672,6 +818,7 @@ impl Typechecker<'_> {
                 Ok(None)
             }
         } else {
+            debug!("No candidate");
             Err(AError::AmbiguousMethod {
                 call_ty,
                 name,
@@ -712,7 +859,7 @@ impl Typechecker<'_> {
         let _ = self.unify_ty(UnifyMode::Normal, expected_return_ty, span, return_ty, span)?;
 
         for restriction in restrictions {
-            self.do_goal_restriction(restriction, &hashset! {})?;
+            self.do_goal_restriction(restriction, &hashset! {}, span)?;
         }
 
         Ok(())
@@ -748,7 +895,7 @@ impl Typechecker<'_> {
             self.unify_ty(UnifyMode::Normal, expected_return_ty, span, return_ty, span)?;
 
         for restriction in restrictions {
-            self.do_goal_restriction(restriction, &hashset! {})?;
+            self.do_goal_restriction(restriction, &hashset! {}, span)?;
         }
 
         Ok(return_ty)
@@ -756,26 +903,20 @@ impl Typechecker<'_> {
 
     pub fn do_goal_restriction(
         &mut self,
-        TRestriction(
-            r_ty,
-            r_ty_span,
-            TTraitTypeWithBindings(r_trait_ty, extra_bindings),
-            r_trait_ty_span,
-        ): TRestriction,
+        TRestriction(r_ty, TTraitTypeWithBindings(r_trait_ty, extra_bindings)): TRestriction,
         allowed: &HashSet<InferId>,
+        span: Span,
     ) -> AResult<()> {
-        if let Some(witness) =
-            self.do_goal_trait(r_ty, r_ty_span, r_trait_ty, r_trait_ty_span, false)?
-        {
+        if let Some(witness) = self.do_goal_trait(r_ty, span, r_trait_ty, span, false)? {
             for (name, expected_ty) in extra_bindings {
-                let found_ty = self.instantiate_ty_from_impl(&witness, name, r_trait_ty_span)?;
+                let found_ty = self.instantiate_ty_from_impl(&witness, name, span)?;
 
                 let _ = self.unify_ty(
                     UnifyMode::GenericInference(allowed),
                     found_ty,
-                    r_trait_ty_span,
+                    span,
                     expected_ty,
-                    r_trait_ty_span,
+                    span,
                 )?;
             }
         }
@@ -817,19 +958,40 @@ impl Typechecker<'_> {
                 self.do_goal_well_formed(*r, span)?;
             },
             TType::Dynamic(trait_ty) => {
-                for ty in &trait_ty.0.lookup(self.ctx).1 {
+                // The Dyn type has to, de novo, satisfy the given trait restrictions
+                let TTraitType(tr, trait_generics) = &*trait_ty.0.lookup(self.ctx);
+
+                self.do_goal_object_safety(*tr, span)?;
+
+                for ty in trait_generics {
                     self.do_goal_well_formed(*ty, span)?;
                 }
 
-                for ty in trait_ty.1.values() {
-                    self.do_goal_well_formed(*ty, span)?;
+                for (name, assoc_ty) in &trait_ty.1 {
+                    self.do_goal_well_formed(*assoc_ty, span)?;
+
+                    let ty_restrictions =
+                        self.instantiate_trait_ty_restrictions(ty, *tr, &trait_generics, *name)?;
+
+                    for restriction in ty_restrictions {
+                        self.do_goal_restriction(
+                            TRestriction(*assoc_ty, restriction),
+                            &hashset! {},
+                            span,
+                        )?;
+                    }
+                }
+
+                let restrictions = self.instantiate_trait_restrictions(ty, *tr, &trait_generics)?;
+                for restriction in restrictions {
+                    self.do_goal_restriction(restriction, &hashset! {}, span)?;
                 }
             },
             TType::Object(o, gs) => {
                 let restrictions = self.instantiate_object_restrictions(*o, &gs)?;
 
                 for restriction in restrictions {
-                    self.do_goal_restriction(restriction, &hashset! {})?;
+                    self.do_goal_restriction(restriction, &hashset! {}, span)?;
                 }
 
                 for g in gs {
@@ -840,7 +1002,7 @@ impl Typechecker<'_> {
                 let restrictions = self.instantiate_enum_restrictions(*e, &gs)?;
 
                 for restriction in restrictions {
-                    self.do_goal_restriction(restriction, &hashset! {})?;
+                    self.do_goal_restriction(restriction, &hashset! {}, span)?;
                 }
 
                 for g in gs {
@@ -978,6 +1140,16 @@ impl Typechecker<'_> {
                 let info = trait_ty.0.lookup(self.ctx).0.lookup(self.ctx);
                 (info.methods[&name].generics.len(), info.methods[&name].span)
             },
+            TImplWitness::DynamicCoersion(..) => (
+                0,
+                // Get the span of `Into::into`... that unwrap is not cute :/
+                self.ctx.lower_into_item().unwrap().lookup(self.ctx).methods
+                    [&self.ctx.static_name("into")]
+                    .span,
+            ),
+            TImplWitness::Concrete => {
+                unreachable!()
+            },
         }
     }
 
@@ -1009,6 +1181,224 @@ impl Typechecker<'_> {
                 given_span,
             })
         }
+    }
+
+    pub fn do_goal_object_safety(&mut self, tr: Id<LTrait>, use_span: Span) -> AResult<()> {
+        if self.object_safe_traits.contains(&tr) {
+            return Ok(());
+        }
+
+        let info = tr.lookup(self.ctx);
+
+        let self_ty = TType::Skolem(info.self_skolem).intern(self.ctx);
+        let self_trait_ty = TTraitType(
+            tr,
+            info.generics
+                .iter()
+                .map(|g| TType::Skolem(*g).intern(self.ctx))
+                .collect(),
+        )
+        .intern(self.ctx);
+
+        for (TRestriction(ty, trait_ty), (t, tr)) in self
+            .initialize_restrictions(&info.restrictions, &btreemap! {})?
+            .into_iter()
+            .zip(&info.restrictions)
+        {
+            self.check_object_safety_ty(
+                ty,
+                self_ty,
+                self_trait_ty,
+                t.lookup(self.ctx).span,
+                use_span,
+            )?;
+            self.check_object_safety_trait_ty_with_bindings(
+                &trait_ty,
+                self_ty,
+                self_trait_ty,
+                tr.lookup(self.ctx).span,
+                use_span,
+            )?;
+        }
+
+        for trait_tys in info.types.values() {
+            for trait_ty in trait_tys {
+                let trait_ty_span = trait_ty.lookup(self.ctx).span;
+                let trait_ty = self.initialize_trait_ty_with_bindings(*trait_ty, &btreemap! {})?;
+                self.check_object_safety_trait_ty_with_bindings(
+                    &trait_ty,
+                    self_ty,
+                    self_trait_ty,
+                    trait_ty_span,
+                    use_span,
+                )?;
+            }
+        }
+
+        for method in info.methods.values() {
+            let mut is_concrete = false;
+
+            // This method is object-safe if it has `Self: Concrete`
+            for (ty, restriction) in &method.restrictions {
+                debug!("self_skolem={:?}, ty = {:?}, restriction = {:?}", Pretty(info.self_skolem, self.ctx), Pretty(ty, self.ctx), Pretty(restriction, self.ctx));
+
+                match (&ty.lookup(self.ctx).data, &restriction.lookup(self.ctx)) {
+                    (LTypeData::SelfSkolem(self_skolem), trait_ty)
+                        if self_skolem.id == info.self_skolem.id
+                            && trait_ty.tr.get(self.ctx) == self.ctx.lower_concrete_item()? =>
+                    {
+                        is_concrete = true;
+                        break;
+                    }
+                    _ => { /* Do nothing */ },
+                }
+            }
+
+            if is_concrete {
+                continue;
+            }
+
+            if !method.has_self || !method.generics.is_empty() {
+                return Err(AError::NotObjectSafeMethod {
+                    trait_name: info.name,
+                    method_name: method.name,
+                    method_span: method.span,
+                    use_span,
+                });
+            }
+
+            for param in &method.parameters[1..] {
+                let ty = self.initialize_ty(param.ty, &btreemap! {})?;
+                self.check_object_safety_ty(ty, self_ty, self_trait_ty, param.span, use_span)?;
+            }
+
+            for (TRestriction(ty, trait_ty), (t, tr)) in self
+                .initialize_restrictions(&info.restrictions, &btreemap! {})?
+                .into_iter()
+                .zip(&info.restrictions)
+            {
+                self.check_object_safety_ty(
+                    ty,
+                    self_ty,
+                    self_trait_ty,
+                    t.lookup(self.ctx).span,
+                    use_span,
+                )?;
+                self.check_object_safety_trait_ty_with_bindings(
+                    &trait_ty,
+                    self_ty,
+                    self_trait_ty,
+                    tr.lookup(self.ctx).span,
+                    use_span,
+                )?;
+            }
+
+            let return_ty = self.initialize_ty(method.return_ty, &btreemap! {})?;
+            self.check_object_safety_ty(
+                return_ty,
+                self_ty,
+                self_trait_ty,
+                method.return_ty.lookup(self.ctx).span,
+                use_span,
+            )?;
+        }
+
+        self.object_safe_traits.insert(tr);
+
+        Ok(())
+    }
+
+    fn check_object_safety_ty(
+        &mut self,
+        ty: Id<TType>,
+        self_ty: Id<TType>,
+        self_trait_ty: Id<TTraitType>,
+        def_span: Span,
+        use_span: Span,
+    ) -> AResult<()> {
+        match &*ty.lookup(self.ctx) {
+            TType::MethodSkolem(_, _)
+            | TType::GenericInfer(_)
+            | TType::Infer(_)
+            | TType::ObjectAccess(_, _)
+            | TType::Associated(_, None, _) => unreachable!(),
+            TType::Associated(ty, Some(trait_ty), _)
+            | TType::AssociatedSkolem(_, ty, trait_ty, _)
+                if *ty == self_ty && *trait_ty == self_trait_ty =>
+            { /* Always object-safe */ }
+            TType::Skolem(_)
+            | TType::Int
+            | TType::Float
+            | TType::Char
+            | TType::Bool
+            | TType::String
+            | TType::Never => { /* Always object-safe */ },
+            TType::Array(e) => {
+                self.check_object_safety_ty(*e, self_ty, self_trait_ty, def_span, use_span)?;
+            },
+            TType::Tuple(es) => {
+                self.check_object_safety_tys(&es, self_ty, self_trait_ty, def_span, use_span)?;
+            },
+            TType::Closure(ps, r) | TType::FnPtr(ps, r) => {
+                self.check_object_safety_tys(&ps, self_ty, self_trait_ty, def_span, use_span)?;
+                self.check_object_safety_ty(*r, self_ty, self_trait_ty, def_span, use_span)?;
+            },
+            TType::Dynamic(tr) => {
+                self.check_object_safety_trait_ty_with_bindings(
+                    tr,
+                    self_ty,
+                    self_trait_ty,
+                    def_span,
+                    use_span,
+                )?;
+            },
+            TType::Object(_, gs) | TType::Enum(_, gs) => {
+                self.check_object_safety_tys(&gs, self_ty, self_trait_ty, def_span, use_span)?;
+            },
+            TType::Associated(..) | TType::AssociatedSkolem(..) => {
+                let trait_info = self_trait_ty.lookup(self.ctx).0.lookup(self.ctx);
+                return Err(AError::NotObjectSafeType {
+                    trait_name: trait_info.name,
+                    ty,
+                    def_span,
+                    use_span,
+                });
+            },
+        }
+
+        Ok(())
+    }
+
+    fn check_object_safety_tys(
+        &mut self,
+        tys: &[Id<TType>],
+        self_ty: Id<TType>,
+        self_trait_ty: Id<TTraitType>,
+        def_span: Span,
+        use_span: Span,
+    ) -> AResult<()> {
+        tys.iter().try_for_each(|ty| {
+            self.check_object_safety_ty(*ty, self_ty, self_trait_ty, def_span, use_span)
+        })
+    }
+
+    fn check_object_safety_trait_ty_with_bindings(
+        &mut self,
+        TTraitTypeWithBindings(trait_ty, bindings): &TTraitTypeWithBindings,
+        self_ty: Id<TType>,
+        self_trait_ty: Id<TTraitType>,
+        def_span: Span,
+        use_span: Span,
+    ) -> AResult<()> {
+        for ty in &trait_ty.lookup(self.ctx).1 {
+            self.check_object_safety_ty(*ty, self_ty, self_trait_ty, def_span, use_span)?;
+        }
+
+        for ty in bindings.values() {
+            self.check_object_safety_ty(*ty, self_ty, self_trait_ty, def_span, use_span)?;
+        }
+
+        Ok(())
     }
 
     fn fresh_infer_ty(&mut self, span: Span) -> Id<TType> {

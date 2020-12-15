@@ -164,6 +164,25 @@ impl Typechecker<'_> {
         )
     }
 
+    pub fn instantiate_trait_restrictions(
+        &mut self,
+        self_ty: Id<TType>,
+        tr: Id<LTrait>,
+        generics: &[Id<TType>],
+    ) -> AResult<Vec<TRestriction>> {
+        let info = tr.lookup(self.ctx);
+
+        let substitutions = &info
+            .generics
+            .iter()
+            .zip_exact(generics.iter())
+            .map(|(g, t)| (g.id, *t))
+            .chain(once((info.self_skolem.id, self_ty)))
+            .collect();
+
+        self.initialize_restrictions(&info.restrictions, &substitutions)
+    }
+
     pub fn instantiate_trait_ty_restrictions(
         &mut self,
         self_ty: Id<TType>,
@@ -212,6 +231,9 @@ impl Typechecker<'_> {
                 trait_ty.1[&name],
                 span,
             ),
+            TImplWitness::DynamicCoersion(..) | TImplWitness::Concrete => {
+                unreachable!()
+            },
         }
     }
 
@@ -220,7 +242,7 @@ impl Typechecker<'_> {
         imp: &TImplWitness,
         name: Id<str>,
         fn_generics: &[Id<TType>],
-        span: Span,
+        _span: Span,
     ) -> AResult<(Vec<Id<TType>>, Id<TType>, Vec<TRestriction>)> {
         match imp {
             TImplWitness::Impl(i, gs) => {
@@ -250,6 +272,18 @@ impl Typechecker<'_> {
             TImplWitness::Dynamic(ty, trait_ty) => {
                 let TTraitType(tr, trait_generics) = &*trait_ty.0.lookup(self.ctx);
                 self.instantiate_trait_fn(*ty, *tr, &trait_generics, name, fn_generics)
+            },
+            TImplWitness::DynamicCoersion(ty, trait_ty) => {
+                assert!(name == self.ctx.static_name("into"));
+
+                Ok((
+                    vec![*ty],
+                    TType::Dynamic(trait_ty.clone()).intern(self.ctx),
+                    vec![],
+                ))
+            },
+            TImplWitness::Concrete => {
+                unreachable!()
             },
         }
     }

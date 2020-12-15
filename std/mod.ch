@@ -1,4 +1,3 @@
-use any::*.
 use lang::*.
 use iterator::*.
 use option::{*, Option::{None, Some}}.

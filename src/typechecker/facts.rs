@@ -6,7 +6,7 @@ use std::{
 
 use crate::{
     lexer::Span,
-    lowering::{fresh_id, GenericId, LModule, LTrait},
+    lowering::{fresh_id, LModule, LTrait},
     util::{AResult, Id, Intern, Pretty, TryCollectBTreeMap, ZipExact},
 };
 
@@ -22,7 +22,7 @@ pub struct TFacts {
         // Type implements trait (with LTrait key extracted for easy comparison)
         (Id<LTrait>, Id<TType>, Id<TTraitType>),
         // Binding types (for assoc ty) + spans for ty and trait_ty of declaration
-        (BTreeMap<Id<str>, Id<TType>>, Span, Span),
+        (BTreeMap<Id<str>, Id<TType>>, Span),
     >,
 }
 
@@ -82,7 +82,6 @@ impl Typechecker<'_> {
             self.assume_restriction(
                 new_facts,
                 self_skolem,
-                info.self_skolem.span,
                 TTraitType(
                     *t,
                     info.generics
@@ -92,17 +91,17 @@ impl Typechecker<'_> {
                 )
                 .intern(self.ctx),
                 btreemap! {},
-                info.span,
+                info.self_skolem.span,
             )?;
 
             let restrictions = self.initialize_restrictions(&info.restrictions, &btreemap! {})?;
             // Assume the restrictions of the trait itself
-            self.assume_restrictions(new_facts, restrictions)?;
+            self.assume_restrictions(new_facts, restrictions, info.span)?;
 
             for method in info.methods.values() {
                 let restrictions =
                     self.initialize_restrictions(&method.restrictions, &btreemap! {})?;
-                self.assume_restrictions(new_facts, restrictions)?;
+                self.assume_restrictions(new_facts, restrictions, method.span)?;
             }
         }
 
@@ -113,7 +112,7 @@ impl Typechecker<'_> {
             debug!("Impl\n:{:#?}\n", Pretty(i, self.ctx));
             debug!("Restrictions\n:{:?}\n\n", Pretty(&restrictions, self.ctx));
             // Assume the restrictions of the trait itself
-            self.assume_restrictions(new_facts, restrictions)?;
+            self.assume_restrictions(new_facts, restrictions, info.span)?;
 
             let self_ty = self.initialize_ty(info.ty, &btreemap! {})?;
             let trait_ty = info
@@ -125,7 +124,7 @@ impl Typechecker<'_> {
                 let restrictions =
                     self.initialize_restrictions(&method.restrictions, &btreemap! {})?;
 
-                self.assume_restrictions(new_facts, restrictions)?;
+                self.assume_restrictions(new_facts, restrictions, method.span)?;
 
                 // Assume the trait method's facts, but for a separate MethodSkolem so we don't
                 // have conflicts
@@ -153,27 +152,27 @@ impl Typechecker<'_> {
                     let restrictions = self
                         .initialize_restrictions(&trait_method_info.restrictions, &substitutions)?;
 
-                    self.assume_restrictions(new_facts, restrictions)?;
+                    self.assume_restrictions(new_facts, restrictions, method.span)?;
                 }
             }
         }
 
         for f in functions.values() {
-            let restrictions =
-                self.initialize_restrictions(&f.lookup(self.ctx).restrictions, &btreemap! {})?;
-            self.assume_restrictions(new_facts, restrictions)?;
+            let info = f.lookup(self.ctx);
+            let restrictions = self.initialize_restrictions(&info.restrictions, &btreemap! {})?;
+            self.assume_restrictions(new_facts, restrictions, info.span)?;
         }
 
         for o in objects.values() {
-            let restrictions =
-                self.initialize_restrictions(&o.lookup(self.ctx).restrictions, &btreemap! {})?;
-            self.assume_restrictions(new_facts, restrictions)?;
+            let info = o.lookup(self.ctx);
+            let restrictions = self.initialize_restrictions(&info.restrictions, &btreemap! {})?;
+            self.assume_restrictions(new_facts, restrictions, info.span)?;
         }
 
         for e in enums.values() {
-            let restrictions =
-                self.initialize_restrictions(&e.lookup(self.ctx).restrictions, &btreemap! {})?;
-            self.assume_restrictions(new_facts, restrictions)?;
+            let info = e.lookup(self.ctx);
+            let restrictions = self.initialize_restrictions(&info.restrictions, &btreemap! {})?;
+            self.assume_restrictions(new_facts, restrictions, info.span)?;
         }
         Ok(())
     }
@@ -182,10 +181,9 @@ impl Typechecker<'_> {
         &mut self,
         new_facts: &mut TFacts,
         ty: Id<TType>,
-        ty_span: Span,
         trait_ty: Id<TTraitType>,
         bindings: BTreeMap<Id<str>, Id<TType>>,
-        trait_ty_span: Span,
+        span: Span,
     ) -> AResult<()> {
         debug!(
             "Assuming that {:?} :- {:?} (bindings: {:?})",
@@ -196,7 +194,7 @@ impl Typechecker<'_> {
 
         let tr = trait_ty.lookup(self.ctx).0;
 
-        let mut bindings = if let Some((old_bindings, _, old_trait_ty_span)) =
+        let mut bindings = if let Some((old_bindings, old_span)) =
             new_facts.assumptions.get(&(tr, ty, trait_ty))
         {
             // Take the old bindings, normalize them
@@ -208,13 +206,7 @@ impl Typechecker<'_> {
                 // Merge the bindings in Skolem mode.
                 new_bindings.insert(
                     n,
-                    self.unify_ty(
-                        UnifyMode::SkolemInference,
-                        old_ty,
-                        *old_trait_ty_span,
-                        ty,
-                        trait_ty_span,
-                    )?,
+                    self.unify_ty(UnifyMode::SkolemInference, old_ty, *old_span, ty, span)?,
                 );
             }
 
@@ -222,7 +214,7 @@ impl Typechecker<'_> {
         } else {
             bindings
                 .iter()
-                .map(|(n, ty)| AResult::Ok((*n, self.normalize_ty(*ty, ty_span)?)))
+                .map(|(n, ty)| AResult::Ok((*n, self.normalize_ty(*ty, span)?)))
                 .try_collect_btreemap()?
         };
 
@@ -257,21 +249,14 @@ impl Typechecker<'_> {
                         Pretty(skolem_ty, self.ctx),
                         Pretty(trait_ty, self.ctx)
                     );
-                    self.assume_restriction(
-                        new_facts,
-                        skolem_ty,
-                        ty_span,
-                        trait_ty,
-                        bindings,
-                        trait_ty_span,
-                    )?;
+                    self.assume_restriction(new_facts, skolem_ty, trait_ty, bindings, span)?;
                 }
             }
         }
 
         new_facts
             .assumptions
-            .insert((tr, ty, trait_ty), (bindings, trait_ty_span, ty_span));
+            .insert((tr, ty, trait_ty), (bindings, span));
 
         Ok(())
     }
@@ -280,11 +265,10 @@ impl Typechecker<'_> {
         &mut self,
         new_facts: &mut TFacts,
         restrictions: Vec<TRestriction>,
+        span: Span,
     ) -> AResult<()> {
-        for TRestriction(ty, ty_span, TTraitTypeWithBindings(trait_ty, bindings), trait_span) in
-            restrictions
-        {
-            self.assume_restriction(new_facts, ty, ty_span, trait_ty, bindings, trait_span)?;
+        for TRestriction(ty, TTraitTypeWithBindings(trait_ty, bindings)) in restrictions {
+            self.assume_restriction(new_facts, ty, trait_ty, bindings, span)?;
         }
 
         Ok(())
@@ -296,11 +280,11 @@ impl Typechecker<'_> {
 
         let mut new_facts = TFacts::empty();
 
-        for ((tr, ty, trait_ty), (bindings, ty_span, trait_ty_span)) in assumptions {
-            let ty = self.normalize_ty(*ty, *ty_span)?;
-            let trait_ty = self.normalize_trait_ty(*trait_ty, *trait_ty_span)?;
+        for ((tr, ty, trait_ty), (bindings, span)) in assumptions {
+            let ty = self.normalize_ty(*ty, *span)?;
+            let trait_ty = self.normalize_trait_ty(*trait_ty, *span)?;
 
-            let bindings = if let Some((old_bindings, _, old_trait_ty_span)) =
+            let bindings = if let Some((old_bindings, old_span)) =
                 new_facts.assumptions.get(&(*tr, ty, trait_ty))
             {
                 // Take the old bindings, normalize them
@@ -312,13 +296,7 @@ impl Typechecker<'_> {
                     // Merge the bindings in Skolem mode.
                     new_bindings.insert(
                         *n,
-                        self.unify_ty(
-                            UnifyMode::SkolemInference,
-                            old_ty,
-                            *old_trait_ty_span,
-                            *ty,
-                            *trait_ty_span,
-                        )?,
+                        self.unify_ty(UnifyMode::SkolemInference, old_ty, *old_span, *ty, *span)?,
                     );
                 }
 
@@ -326,13 +304,13 @@ impl Typechecker<'_> {
             } else {
                 bindings
                     .iter()
-                    .map(|(n, ty)| AResult::Ok((*n, self.normalize_ty(*ty, *ty_span)?)))
+                    .map(|(n, ty)| AResult::Ok((*n, self.normalize_ty(*ty, *span)?)))
                     .try_collect_btreemap()?
             };
 
             new_facts
                 .assumptions
-                .insert((*tr, ty, trait_ty), (bindings, *ty_span, *trait_ty_span));
+                .insert((*tr, ty, trait_ty), (bindings, *span));
         }
 
         Ok(Arc::new(new_facts))
