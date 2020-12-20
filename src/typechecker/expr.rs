@@ -1,8 +1,9 @@
 //! All of the methods having to do with expression-level typechecking
 
 use crate::{
-    lowering::{LExpression, LExpressionData, LPattern, LPatternData, LStatement, LStatementData},
-    parser::PLiteral,
+    lowering::{
+        LExpression, LExpressionData, LLiteral, LPattern, LPatternData, LStatement, LStatementData,
+    },
     util::{AError, AResult, Id, Intern, Pretty, TryCollectVec, ZipExact},
 };
 
@@ -20,12 +21,12 @@ impl Typechecker<'_> {
         } = &*e.lookup(self.ctx);
 
         let ty = match data {
-            LExpressionData::Literal(PLiteral::True)
-            | LExpressionData::Literal(PLiteral::False) => self.ctx.static_ty(&TType::Bool),
-            LExpressionData::Literal(PLiteral::Int(_)) => self.ctx.static_ty(&TType::Int),
-            LExpressionData::Literal(PLiteral::Float(_)) => self.ctx.static_ty(&TType::Float),
-            LExpressionData::Literal(PLiteral::String(_)) => self.ctx.static_ty(&TType::String),
-            LExpressionData::Literal(PLiteral::Char(_)) => self.ctx.static_ty(&TType::Char),
+            LExpressionData::Literal(LLiteral::True)
+            | LExpressionData::Literal(LLiteral::False) => self.ctx.static_ty(&TType::Bool),
+            LExpressionData::Literal(LLiteral::Int(_)) => self.ctx.static_ty(&TType::Int),
+            LExpressionData::Literal(LLiteral::Float(_)) => self.ctx.static_ty(&TType::Float),
+            LExpressionData::Literal(LLiteral::String(_)) => self.ctx.static_ty(&TType::String),
+            LExpressionData::Literal(LLiteral::Char(_)) => self.ctx.static_ty(&TType::Char),
             LExpressionData::Variable(v) => self.normalize_ty(self.variables[&v.id], *span)?,
             LExpressionData::Block(ss, expr) => {
                 for s in ss {
@@ -88,15 +89,25 @@ impl Typechecker<'_> {
 
                 return_ty
             },
-            LExpressionData::Access(o, span, name) => {
+            LExpressionData::Access(o, span, name, access_ty) => {
                 let object_ty = self.satisfy_expr(*o)?;
+                let access_ty = self.satisfy_ty(*access_ty)?;
 
-                self.do_goal_access(object_ty, *name, *span)?
+                if let Some(ty) = self.do_goal_access(object_ty, *name, *span)? {
+                    self.unify_ty(UnifyMode::Normal, access_ty, *span, ty, *span)?
+                } else {
+                    access_ty
+                }
             },
-            LExpressionData::IndexAccess(o, span, idx) => {
+            LExpressionData::IndexAccess(o, span, idx, access_ty) => {
                 let object_ty = self.satisfy_expr(*o)?;
+                let access_ty = self.satisfy_ty(*access_ty)?;
 
-                self.do_goal_index_access(object_ty, *idx, *span)?
+                if let Some(ty) = self.do_goal_index_access(object_ty, *idx, *span)? {
+                    self.unify_ty(UnifyMode::Normal, access_ty, *span, ty, *span)?
+                } else {
+                    access_ty
+                }
             },
             LExpressionData::Tuple(es) => TType::Tuple(self.satisfy_exprs(&es)?).intern(self.ctx),
             LExpressionData::ArrayLiteral(es, elem_ty) => {
@@ -489,12 +500,12 @@ impl Typechecker<'_> {
 
         let ty = match data {
             LPatternData::Underscore(ty) => self.satisfy_ty(*ty)?,
-            LPatternData::Literal(PLiteral::True) | LPatternData::Literal(PLiteral::False) =>
+            LPatternData::Literal(LLiteral::True) | LPatternData::Literal(LLiteral::False) =>
                 self.ctx.static_ty(&TType::Bool),
-            LPatternData::Literal(PLiteral::Int(_)) => self.ctx.static_ty(&TType::Int),
-            LPatternData::Literal(PLiteral::Float(_)) => self.ctx.static_ty(&TType::Float),
-            LPatternData::Literal(PLiteral::String(_)) => self.ctx.static_ty(&TType::String),
-            LPatternData::Literal(PLiteral::Char(_)) => self.ctx.static_ty(&TType::Char),
+            LPatternData::Literal(LLiteral::Int(_)) => self.ctx.static_ty(&TType::Int),
+            LPatternData::Literal(LLiteral::Float(_)) => self.ctx.static_ty(&TType::Float),
+            LPatternData::Literal(LLiteral::String(_)) => self.ctx.static_ty(&TType::String),
+            LPatternData::Literal(LLiteral::Char(_)) => self.ctx.static_ty(&TType::Char),
             LPatternData::Variable(v) => self.normalize_ty(self.variables[&v.id], *span)?,
             LPatternData::Tuple(ps) => TType::Tuple(self.satisfy_patterns(&ps)?).intern(self.ctx),
             LPatternData::StructPattern(o, gs, members) => {

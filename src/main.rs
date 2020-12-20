@@ -24,6 +24,7 @@ mod lexer;
 mod lowering;
 mod parser;
 mod read;
+mod translate;
 mod typechecker;
 mod util;
 
@@ -50,6 +51,7 @@ enum Mode {
     Parse,
     Lower,
     Typecheck,
+    Translate,
 }
 
 impl std::str::FromStr for Mode {
@@ -62,6 +64,7 @@ impl std::str::FromStr for Mode {
             "parse" | "p" => Ok(Mode::Parse),
             "lower" | "c" => Ok(Mode::Lower),
             "typecheck" | "t" => Ok(Mode::Typecheck),
+            "translate" | "m" => Ok(Mode::Translate),
             m => Err(format!("Invalid compiler mode `{}`", m)),
         }
     }
@@ -118,6 +121,10 @@ fn try_main(ctx: &mut AdelaideDatabase) -> AResult<()> {
         Mode::Typecheck => {
             ctx.typecheck_program()?;
             stdoutln!("Typechecked!")?;
+        },
+        Mode::Translate => {
+            ctx.translate_program()?;
+            stdoutln!("Translated!")?;
         },
     }
 

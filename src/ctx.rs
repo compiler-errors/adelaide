@@ -19,7 +19,7 @@ use crate::{
         PTrait, PTraitType, PTraitTypeWithBindings, PType, PUse,
     },
     read::{RawFile, RawFileSource},
-    typechecker::{TTraitType, TType},
+    typechecker::{TTraitType, TTraitTypeWithBindings, TType},
     util::{AResult, Id, Intern, Opaque},
 };
 
@@ -229,6 +229,12 @@ pub trait AdelaideContext: salsa::Database {
     #[salsa::interned]
     fn intern_ttraittype(&self, key: Arc<TTraitType>) -> Id<TTraitType>;
 
+    #[salsa::interned]
+    fn intern_ttraittypewithbindings(
+        &self,
+        key: Arc<TTraitTypeWithBindings>,
+    ) -> Id<TTraitTypeWithBindings>;
+
     fn static_ty(&self, ty: &'static TType) -> Id<TType>;
 
     #[salsa::invoke(crate::typechecker::get_impls_for_trait)]
@@ -240,10 +246,13 @@ pub trait AdelaideContext: salsa::Database {
     #[salsa::invoke(crate::typechecker::get_traits_accessible_in_module)]
     fn get_traits_accessible_in_module(&self, m: Id<LModule>) -> AResult<Arc<[Id<LTrait>]>>;
 
-    #[salsa::invoke(crate::typechecker::typecheck_program)]
+    #[salsa::invoke(crate::typechecker::typecheck_program_result)]
     fn typecheck_program(&self) -> AResult<()>;
 
     // ------ MONOMORPHIZATION ------ //
+
+    #[salsa::invoke(crate::translate::translate_program)]
+    fn translate_program(&self) -> AResult<()>;
 
     // ...
 }

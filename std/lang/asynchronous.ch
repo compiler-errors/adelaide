@@ -31,7 +31,7 @@ impl<T> Wait for T where T: Poll {
     fn wait(self) -> <Self as Poll>::Result = {
         let pollable = self.
 
-        while true {
+        loop {
             let (state, new_pollable) = pollable:poll().
 
             match state {

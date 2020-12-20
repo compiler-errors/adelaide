@@ -4,7 +4,7 @@ use crate::{
     lexer::Span,
     lowering::{
         GenericId, LEnum, LFunction, LGlobal, LImpl, LModule, LObject, LTrait, LTraitType,
-        LTraitTypeWithBindings, LType, LVariableContext,
+        LTraitTypeWithBindings, LType, LTypeData, LVariableContext,
     },
     util::{AResult, Id, Intern, TryCollectVec, ZipExact},
 };
@@ -59,7 +59,7 @@ impl Typechecker<'_> {
         Ok(())
     }
 
-    fn typecheck_global(&mut self, g: Id<LGlobal>) -> AResult<()> {
+    pub fn typecheck_global(&mut self, g: Id<LGlobal>) -> AResult<()> {
         let info = g.lookup(self.ctx);
 
         self.satisfy_vcx(&info.vcx)?;
@@ -77,7 +77,7 @@ impl Typechecker<'_> {
         Ok(())
     }
 
-    fn typecheck_function(&mut self, f: Id<LFunction>) -> AResult<()> {
+    pub fn typecheck_function(&mut self, f: Id<LFunction>) -> AResult<()> {
         let info = f.lookup(self.ctx);
 
         // Also satisfies all the parameters
@@ -146,7 +146,12 @@ impl Typechecker<'_> {
     fn typecheck_trait(&mut self, t: Id<LTrait>) -> AResult<()> {
         let info = t.lookup(self.ctx);
 
-        let self_skolem = TType::Skolem(info.self_skolem).intern(self.ctx);
+        let self_skolem = LType {
+            span: info.self_skolem.span,
+            data: LTypeData::SelfSkolem(info.self_skolem),
+        }
+        .intern(self.ctx);
+        let lowered_self_skolem = TType::Skolem(info.self_skolem).intern(self.ctx);
         let self_trait_ty = TTraitType(
             t,
             info.generics
@@ -158,7 +163,8 @@ impl Typechecker<'_> {
 
         for (name, restrictions) in &info.types {
             let assoc_ty =
-                TType::Associated(self_skolem, Some(self_trait_ty), *name).intern(self.ctx);
+                TType::Associated(self_skolem, lowered_self_skolem, Some(self_trait_ty), *name)
+                    .intern(self.ctx);
 
             for restriction in restrictions {
                 let span = restriction.lookup(self.ctx).span;
@@ -309,6 +315,86 @@ impl Typechecker<'_> {
         Ok(())
     }
 
+    pub fn typecheck_method_oneoff(&mut self, imp: Id<LImpl>, name: Id<str>) -> AResult<()> {
+        let info = imp.lookup(self.ctx);
+
+        let self_ty = self.satisfy_ty(info.ty)?;
+
+        let trait_ty = info
+            .trait_ty
+            .map(|t| self.satisfy_trait_ty(t))
+            .transpose()?;
+
+        let method_info = &info.methods[&name];
+
+        // Also satisfies all the parameters
+        self.satisfy_vcx(&method_info.vcx)?;
+
+        let return_ty = self.satisfy_ty(method_info.return_ty)?;
+        self.return_tys
+            .push((return_ty, method_info.return_ty.lookup(self.ctx).span));
+
+        let body_ty = self.satisfy_expr(method_info.body)?;
+        let _ = self.unify_ty(
+            UnifyMode::Normal,
+            return_ty,
+            method_info.return_ty.lookup(self.ctx).span,
+            body_ty,
+            method_info.body.lookup(self.ctx).span,
+        )?;
+
+        self.return_tys.pop();
+
+        self.satisfy_restrictions(&method_info.restrictions)?;
+
+        if let Some(trait_ty) = trait_ty {
+            let trait_ty = trait_ty.lookup(self.ctx);
+            let trait_info = trait_ty.0.lookup(self.ctx);
+            let trait_method_info = &trait_info.methods[&method_info.name];
+
+            let fn_generics: Vec<_> = method_info
+                .generics
+                .iter()
+                .map(|g| TType::Skolem(*g).intern(self.ctx))
+                .collect();
+
+            let (expected_param_tys, expected_return_ty, restrictions) = self
+                .instantiate_trait_fn(
+                    self_ty,
+                    trait_ty.0,
+                    &trait_ty.1,
+                    method_info.name,
+                    &fn_generics,
+                )?;
+
+            let _ = self.unify_ty(
+                UnifyMode::Nothing,
+                expected_return_ty,
+                trait_method_info.return_ty.lookup(self.ctx).span,
+                return_ty,
+                method_info.return_ty.lookup(self.ctx).span,
+            )?;
+
+            // Just for good measure...
+            assert_eq!(expected_param_tys.len(), method_info.parameters.len());
+
+            for (i, expected_param_ty) in expected_param_tys.into_iter().enumerate() {
+                let _ = self.unify_ty(
+                    UnifyMode::Nothing,
+                    expected_param_ty,
+                    trait_method_info.parameters[i].span,
+                    // We already lowered the parameter while satisfying the vcx
+                    self.variables[&method_info.parameters[i].id],
+                    method_info.parameters[i].span,
+                )?;
+            }
+
+            self.satisfy_instantiated_restrictions(restrictions, method_info.span)?;
+        }
+
+        Ok(())
+    }
+
     pub fn satisfy_ty(&mut self, ty: Id<LType>) -> AResult<Id<TType>> {
         let span = ty.lookup(self.ctx).span;
         let ty = self.initialize_ty(ty, &btreemap! {})?;
@@ -336,15 +422,16 @@ impl Typechecker<'_> {
     fn satisfy_trait_ty_with_bindings(
         &mut self,
         trait_ty: Id<LTraitTypeWithBindings>,
-    ) -> AResult<TTraitTypeWithBindings> {
+    ) -> AResult<Id<TTraitTypeWithBindings>> {
         let span = trait_ty.lookup(self.ctx).span;
         let trait_ty = self.initialize_trait_ty_with_bindings(trait_ty, &btreemap! {})?;
 
-        for ty in &trait_ty.0.lookup(self.ctx).1 {
+        // Sorry for two lookups in this fn, I'm Lazy(TM)
+        for ty in &trait_ty.lookup(self.ctx).0.lookup(self.ctx).1 {
             self.do_goal_well_formed(*ty, span)?;
         }
 
-        for ty in trait_ty.1.values() {
+        for ty in trait_ty.lookup(self.ctx).1.values() {
             self.do_goal_well_formed(*ty, span)?;
         }
 
@@ -394,7 +481,8 @@ impl Typechecker<'_> {
         span: Span,
     ) -> AResult<()> {
         for restriction in restrictions {
-            let TRestriction(ty, TTraitTypeWithBindings(trait_ty, bindings)) = &restriction;
+            let TRestriction(ty, trait_ty) = &restriction;
+            let TTraitTypeWithBindings(trait_ty, bindings) = &*trait_ty.lookup(self.ctx);
 
             self.do_goal_well_formed(*ty, span)?;
 
@@ -417,7 +505,7 @@ impl Typechecker<'_> {
 pub struct TTrait {
     pub generics: Vec<GenericId>,
     pub restrictions: Vec<TRestriction>,
-    pub types: BTreeMap<Id<str>, Vec<TTraitTypeWithBindings>>,
+    pub types: BTreeMap<Id<str>, Vec<Id<TTraitTypeWithBindings>>>,
     pub methods: BTreeMap<Id<str>, TMethod>,
 }
 
@@ -430,7 +518,7 @@ pub struct TImpl {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PrettyPrint)]
-pub struct TRestriction(pub Id<TType>, pub TTraitTypeWithBindings);
+pub struct TRestriction(pub Id<TType>, pub Id<TTraitTypeWithBindings>);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TMethod {

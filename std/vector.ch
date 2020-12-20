@@ -105,12 +105,6 @@ impl<T> Iterator for VectorIterator<T> {
     }
   }.
 
-  fn has_next(self) -> Bool = {
-    let VectorIterator { vector, idx } = self.
-
-    idx < vector:size
-  }.
-
   fn size_hint(self) -> Int = {
     let VectorIterator { vector, idx } = self.
 

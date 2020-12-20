@@ -41,7 +41,7 @@ impl<K, V> Self for HashMap<K, V> where K: Equals<K> + Hash {
     let bucket = self:bucket_from_hash(hash).
 
     let next_link = bucket:entries:root.
-    while true {
+    loop {
       match next_link {
         Some(link) => {
           let (old_hash, old_key, old_value) = link:get().
@@ -70,7 +70,7 @@ impl<K, V> Self for HashMap<K, V> where K: Equals<K> + Hash {
     let bucket = self:bucket_from_hash(hash).
 
     let next_link = bucket:entries:root.
-    while true {
+    loop {
       match next_link {
         Some(link) => {
           let (old_hash, old_key, old_value) = link:get().
@@ -161,35 +161,30 @@ impl<K, V> Iterator for HashMapIterator<K, V> {
   fn next(self) -> (Option<(K, V)>, HashMapIterator<K, V>) = {
     let HashMapIterator { size_hint, buckets, links } = self.
 
-    if links:has_next() {
-      let (next_link, links) = links:next().
-      let (_, k, v) = next_link:unwrap().
+    if let (Some((_, k, v)), links) = links:next() {
       return (Some((k, v)), HashMapIterator { size_hint: size_hint - 1, buckets, links }).
     }
 
     let ArrayIterator { idx: buckets_idx, ... } = buckets.
 
-    while buckets:has_next() {
-      let (next_bucket, next_buckets) = buckets:next().
-      buckets = next_buckets. // We can't overwrite in a destructure.
+    // TODO: while let
+    loop {
+      if let (Some(next_bucket), next_buckets) = buckets:next() {
+        buckets = next_buckets. // We can't overwrite in a destructure.
 
-      let next_bucket = next_bucket:unwrap().
+        if next_bucket:entries:len() > 0 {
+          let (next_link, links) = next_bucket:entries:iterator():next().
+          let (_, k, v) = next_link:unwrap().
 
-      if next_bucket:entries:len() > 0 {
-        let (next_link, links) = next_bucket:entries:iterator():next().
-        let (_, k, v) = next_link:unwrap().
-
-        return (Some((k, v)), HashMapIterator { size_hint: size_hint - 1, buckets, links }).
+          return (Some((k, v)), HashMapIterator { size_hint: size_hint - 1, buckets, links }).
+        }
+      } else {
+        break.
       }
     }
 
     assert size_hint == 0.
     (None, HashMapIterator { size_hint, buckets, links })
-  }.
-
-  fn has_next(self) -> Bool = {
-    let HashMapIterator { size_hint, ... } = self.
-    size_hint > 0
   }.
 
   fn size_hint(self) -> Int = {
@@ -203,7 +198,7 @@ impl<K, V> FromIterator<(K, V)> for HashMap<K, V> where K: Equals<K> + Hash {
     let map = HashMap::new().
 
     for (k, v) in it {
-      map[k] = v.
+      map:put(k, v).
     }
 
     map

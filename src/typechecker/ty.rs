@@ -1,7 +1,5 @@
 use std::collections::{BTreeMap, HashSet};
 
-use either::Either;
-
 use crate::{
     ctx::AdelaideContext,
     lexer::Span,
@@ -36,17 +34,16 @@ pub enum TType {
     Tuple(Vec<Id<TType>>),
     Closure(Vec<Id<TType>>, Id<TType>),
     FnPtr(Vec<Id<TType>>, Id<TType>),
-    Dynamic(TTraitTypeWithBindings),
+    Dynamic(Id<TTraitTypeWithBindings>),
     Object(Id<LObject>, Vec<Id<TType>>),
     Enum(Id<LEnum>, Vec<Id<TType>>),
-    ObjectAccess(Id<TType>, Either<Id<str>, usize>),
-    Associated(Id<TType>, Option<Id<TTraitType>>, Id<str>),
+    Associated(Id<LType>, Id<TType>, Option<Id<TTraitType>>, Id<str>),
 }
 
 #[derive(Debug, Hash, Eq, PartialEq, Clone, Lookup)]
 pub struct TTraitType(pub Id<LTrait>, pub Vec<Id<TType>>);
 
-#[derive(Debug, Hash, Eq, PartialEq, Clone)]
+#[derive(Debug, Hash, Eq, PartialEq, Clone, Lookup)]
 pub struct TTraitTypeWithBindings(pub Id<TTraitType>, pub BTreeMap<Id<str>, Id<TType>>);
 
 #[derive(Copy, Clone, Debug, PrettyPrint)]
@@ -90,6 +87,8 @@ impl Typechecker<'_> {
                         Pretty(substitutions, self.ctx)
                     );
                     self.normalize_ty(ty, *span)?
+                } else if let Some(global_substitutions) = &self.global_substitutions {
+                    global_substitutions[&g.id]
                 } else {
                     debug!(
                         "We didn't replace {:?} (subs = {:?})",
@@ -127,21 +126,23 @@ impl Typechecker<'_> {
             LTypeData::Enum(e, gs) =>
                 TType::Enum(e.get(self.ctx), self.initialize_tys(&gs, substitutions)?)
                     .intern(self.ctx),
-            LTypeData::Associated(ty, Some(trait_ty), name) => {
-                let ty_span = ty.lookup(self.ctx).span;
-                let ty = self.initialize_ty(*ty, substitutions)?;
+            LTypeData::Associated(parent_ty, Some(trait_ty), name) => {
+                let ty_span = parent_ty.lookup(self.ctx).span;
+                let parent_ty = self.initialize_ty(*parent_ty, substitutions)?;
                 let trait_ty_span = trait_ty.lookup(self.ctx).span;
                 let trait_ty = self.initialize_trait_ty(*trait_ty, substitutions)?;
 
-                if let Some(imp) = self.do_goal_trait(ty, ty_span, trait_ty, trait_ty_span, true)? {
+                if let Some(imp) =
+                    self.do_goal_trait(parent_ty, ty_span, trait_ty, trait_ty_span, true)?
+                {
                     self.instantiate_ty_from_impl(&imp, *name, *span)?
                 } else {
-                    TType::Associated(ty, Some(trait_ty), *name).intern(self.ctx)
+                    TType::Associated(ty, parent_ty, Some(trait_ty), *name).intern(self.ctx)
                 }
             },
-            LTypeData::Associated(ty, None, name) => {
-                let ty = self.initialize_ty(*ty, substitutions)?;
-                self.do_goal_associated_type(ty, *name, *span)?
+            LTypeData::Associated(parent_ty, None, name) => {
+                let parent_ty = self.initialize_ty(*parent_ty, substitutions)?;
+                self.do_goal_associated_type(ty, parent_ty, *name, *span)?
             },
         };
 
@@ -180,7 +181,7 @@ impl Typechecker<'_> {
         &mut self,
         trait_ty: Id<LTraitTypeWithBindings>,
         substitutions: &BTreeMap<GenericId, Id<TType>>,
-    ) -> AResult<TTraitTypeWithBindings> {
+    ) -> AResult<Id<TTraitTypeWithBindings>> {
         let LTraitTypeWithBindings {
             tr,
             generics,
@@ -199,7 +200,7 @@ impl Typechecker<'_> {
         )
         .intern(self.ctx);
 
-        Ok(TTraitTypeWithBindings(trait_ty, bindings))
+        Ok(TTraitTypeWithBindings(trait_ty, bindings).intern(self.ctx))
     }
 
     pub fn initialize_restrictions(
@@ -312,7 +313,7 @@ impl Typechecker<'_> {
             (_, TType::Never, _) => right_ty,
             (_, _, TType::Never) => left_ty,
 
-            (_, TType::Infer(_), _) | (_, TType::GenericInfer(_), _) | (_, TType::Associated(..), _) | (_, TType::ObjectAccess(..), _) => {
+            (_, TType::Infer(_), _) | (_, TType::GenericInfer(_), _) | (_, TType::Associated(..), _) => {
                 self.set_ambiguity(AError::CannotUnify {
                     left_ty,
                     left_span,
@@ -321,7 +322,7 @@ impl Typechecker<'_> {
                 });
                 right_ty
             },
-            (_, _, TType::Infer(_)) | (_, _, TType::GenericInfer(_)) | (_, _, TType::Associated(..)) | (_, _, TType::ObjectAccess(..)) => {
+            (_, _, TType::Infer(_)) | (_, _, TType::GenericInfer(_)) | (_, _, TType::Associated(..)) => {
                 self.set_ambiguity(AError::CannotUnify {
                     left_ty,
                     left_span,
@@ -358,10 +359,13 @@ impl Typechecker<'_> {
 
             (
                 _,
-                TType::Dynamic(TTraitTypeWithBindings(left_trait_ty, left_bindings)),
-                TType::Dynamic(TTraitTypeWithBindings(right_trait_ty, right_bindings)),
+                TType::Dynamic(left_trait_ty),
+                TType::Dynamic(right_trait_ty),
             ) => {
+                let TTraitTypeWithBindings(left_trait_ty, left_bindings) = &*left_trait_ty.lookup(self.ctx);
                 let left_trait_ty = left_trait_ty.lookup(self.ctx);
+
+                let TTraitTypeWithBindings(right_trait_ty, right_bindings) = &*right_trait_ty.lookup(self.ctx);
                 let right_trait_ty = right_trait_ty.lookup(self.ctx);
 
                 if left_trait_ty.0 == right_trait_ty.0 {
@@ -392,7 +396,7 @@ impl Typechecker<'_> {
                     TType::Dynamic(TTraitTypeWithBindings(
                         TTraitType(left_trait_ty.0, generics).intern(self.ctx),
                         bindings,
-                    ))
+                    ).intern(self.ctx))
                     .intern(self.ctx)
                 } else {
                     return Err(AError::CannotUnify {
@@ -500,25 +504,21 @@ impl Typechecker<'_> {
             | TType::Char
             | TType::Bool
             | TType::String
-            | TType::Never
-            | TType::Skolem(_)
-            | TType::MethodSkolem(..) => ty,
+            | TType::Never => ty,
+            TType::Skolem(_) | TType::MethodSkolem(..) => {
+                assert!(self.global_substitutions.is_none());
+                ty
+            },
             // Attempt to deref an infer (TODO: loop detection)
             TType::AssociatedSkolem(id, ..) =>
                 if let Some(ty) = self.get_infer(*id, span)? {
                     ty
                 } else {
+                    assert!(self.global_substitutions.is_none());
                     ty
                 },
             // Attempt to deref an infer (TODO: loop detection)
-            TType::GenericInfer(id) =>
-                if let Some(ty) = self.get_infer(*id, span)? {
-                    ty
-                } else {
-                    ty
-                },
-            // Attempt to deref an infer (TODO: loop detection)
-            TType::Infer(id) =>
+            TType::GenericInfer(id) | TType::Infer(id) =>
                 if let Some(ty) = self.get_infer(*id, span)? {
                     ty
                 } else {
@@ -532,33 +532,40 @@ impl Typechecker<'_> {
             TType::FnPtr(ps, r) =>
                 TType::FnPtr(self.normalize_tys(&ps, span)?, self.normalize_ty(*r, span)?)
                     .intern(self.ctx),
-            TType::Dynamic(TTraitTypeWithBindings(trait_ty, bindings)) =>
-                TType::Dynamic(TTraitTypeWithBindings(
-                    self.normalize_trait_ty(*trait_ty, span)?,
-                    bindings
-                        .iter()
-                        .map(|(n, ty)| AResult::Ok((*n, self.normalize_ty(*ty, span)?)))
-                        .try_collect_btreemap()?,
-                ))
-                .intern(self.ctx),
+            TType::Dynamic(trait_ty) => {
+                let TTraitTypeWithBindings(trait_ty, bindings) = &*trait_ty.lookup(self.ctx);
+
+                TType::Dynamic(
+                    TTraitTypeWithBindings(
+                        self.normalize_trait_ty(*trait_ty, span)?,
+                        bindings
+                            .iter()
+                            .map(|(n, ty)| AResult::Ok((*n, self.normalize_ty(*ty, span)?)))
+                            .try_collect_btreemap()?,
+                    )
+                    .intern(self.ctx),
+                )
+                .intern(self.ctx)
+            },
             TType::Object(o, gs) =>
                 TType::Object(*o, self.normalize_tys(&gs, span)?).intern(self.ctx),
             TType::Enum(e, gs) => TType::Enum(*e, self.normalize_tys(&gs, span)?).intern(self.ctx),
 
             // Attempt to actually solve the associated type
-            TType::Associated(ty, Some(trait_ty), name) => {
+            TType::Associated(key, ty, Some(trait_ty), name) => {
                 let ty = self.normalize_ty(*ty, span)?;
                 let trait_ty = self.normalize_trait_ty(*trait_ty, span)?;
 
                 if let Some(imp) = self.do_goal_trait(ty, span, trait_ty, span, true)? {
-                    self.instantiate_ty_from_impl(&imp, *name, span)?
+                    let ty = self.instantiate_ty_from_impl(&imp, *name, span)?;
+                    self.normalize_ty(ty, span)?
                 } else if !self.is_concrete_ty(ty)
                     || !self.is_concrete_trait_ty(trait_ty)
                     || self.type_facts.is_none()
                 {
                     // If we have a non-concrete type, or our facts are not yet initialized, then
                     // woo.
-                    TType::Associated(ty, Some(trait_ty), *name).intern(self.ctx)
+                    TType::Associated(*key, ty, Some(trait_ty), *name).intern(self.ctx)
                 } else {
                     return Err(AError::NoSolution {
                         ty,
@@ -568,10 +575,8 @@ impl Typechecker<'_> {
                     });
                 }
             },
-            TType::Associated(ty, None, name) => self.do_goal_associated_type(*ty, *name, span)?,
-            TType::ObjectAccess(ty, Either::Left(name)) => self.do_goal_access(*ty, *name, span)?,
-            TType::ObjectAccess(ty, Either::Right(idx)) =>
-                self.do_goal_index_access(*ty, *idx, span)?,
+            TType::Associated(key, ty, None, name) =>
+                self.do_goal_associated_type(*key, *ty, *name, span)?,
         };
 
         Ok(ty)
@@ -604,17 +609,16 @@ impl Typechecker<'_> {
             | TType::Bool
             | TType::String
             | TType::Never => true,
-            TType::Infer(_)
-            | TType::GenericInfer(_)
-            | TType::Associated(_, _, _)
-            | TType::ObjectAccess(..) => false,
+            TType::Infer(_) | TType::GenericInfer(_) | TType::Associated(..) => false,
             TType::Array(e) => self.is_concrete_ty(*e),
             TType::Tuple(es) => self.is_concrete_tys(&es),
             TType::Closure(ps, r) | TType::FnPtr(ps, r) =>
                 self.is_concrete_tys(&ps) && self.is_concrete_ty(*r),
-            TType::Dynamic(TTraitTypeWithBindings(trait_ty, bindings)) =>
+            TType::Dynamic(trait_ty) => {
+                let TTraitTypeWithBindings(trait_ty, bindings) = &*trait_ty.lookup(self.ctx);
                 self.is_concrete_trait_ty(*trait_ty)
-                    && bindings.iter().all(|(_, ty)| self.is_concrete_ty(*ty)),
+                    && bindings.iter().all(|(_, ty)| self.is_concrete_ty(*ty))
+            },
             TType::Object(_, gs) | TType::Enum(_, gs) => self.is_concrete_tys(&gs),
         }
     }
@@ -643,12 +647,6 @@ impl PrettyPrint for TType {
                     Pretty(name, ctx),
                     id.0,
                 )?;
-            },
-            TType::ObjectAccess(ty, Either::Left(name)) => {
-                write!(f, "<{:?} member {:?}>", Pretty(ty, ctx), Pretty(name, ctx))?;
-            },
-            TType::ObjectAccess(ty, Either::Right(idx)) => {
-                write!(f, "<{:?} at index {:?}>", Pretty(ty, ctx), idx)?;
             },
             TType::GenericInfer(id) => {
                 write!(f, "_G{}", id.0)?;
@@ -759,7 +757,7 @@ impl PrettyPrint for TType {
                     write!(f, ">")?;
                 }
             },
-            TType::Associated(ty, Some(trait_ty), name) => {
+            TType::Associated(_, ty, Some(trait_ty), name) => {
                 write!(
                     f,
                     "<{:?} as {:?}>::{:?}",
@@ -768,7 +766,7 @@ impl PrettyPrint for TType {
                     Pretty(name, ctx)
                 )?;
             },
-            TType::Associated(ty, None, name) => {
+            TType::Associated(_, ty, None, name) => {
                 write!(f, "<{:?}>::{:?}", Pretty(ty, ctx), Pretty(name, ctx))?;
             },
         }

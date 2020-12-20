@@ -19,7 +19,7 @@ use crate::{
     util::{AError, AResult, Id, Intern, LId, LateLookup, TryCollectVec},
 };
 
-pub use expr::{LExpression, LExpressionData, LStatement, LStatementData};
+pub use expr::{LExpression, LExpressionData, LLiteral, LStatement, LStatementData};
 pub use pattern::{LPattern, LPatternData};
 pub use ty::{LTraitType, LTraitTypeWithBindings, LType, LTypeData};
 pub use uses::{

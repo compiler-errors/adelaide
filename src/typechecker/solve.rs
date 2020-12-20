@@ -1,11 +1,16 @@
-use std::collections::{BTreeMap, HashSet};
+use std::{
+    collections::{BTreeMap, HashMap, HashSet},
+    sync::Arc,
+};
 
 use either::Either;
 
 use crate::{
     ctx::AdelaideContext,
     lexer::Span,
-    lowering::{fresh_id, GenericId, InferId, LExpression, LImpl, LMembers, LTrait, LTypeData},
+    lowering::{
+        fresh_id, GenericId, InferId, LExpression, LImpl, LMembers, LTrait, LType, LTypeData,
+    },
     util::{AError, AResult, Id, Intern, Pretty, PrettyPrint, TryCollectBTreeMap, ZipExact},
 };
 
@@ -19,9 +24,22 @@ use super::{
 pub enum TImplWitness {
     Impl(Id<LImpl>, BTreeMap<GenericId, Id<TType>>),
     Assumption(Id<LTrait>, Id<TType>, Id<TTraitType>),
-    Dynamic(Id<TType>, TTraitTypeWithBindings),
-    DynamicCoersion(Id<TType>, TTraitTypeWithBindings),
+    Dynamic(Id<TType>, Id<TTraitTypeWithBindings>),
+    DynamicCoersion(Id<TType>, Id<TTraitTypeWithBindings>),
     Concrete,
+}
+
+impl TImplWitness {
+    fn as_provider(&self, ctx: &dyn AdelaideContext) -> TProvider {
+        match self {
+            TImplWitness::Impl(i, _) => TProvider::Impl(*i),
+            TImplWitness::Assumption(tr, _, _) => TProvider::Trait(*tr),
+            TImplWitness::Dynamic(_, trait_ty) =>
+                TProvider::Trait(trait_ty.lookup(ctx).0.lookup(ctx).0),
+            TImplWitness::DynamicCoersion(_, _) => TProvider::Trait(ctx.lower_into_item().unwrap()),
+            TImplWitness::Concrete => TProvider::Trait(ctx.lower_concrete_item().unwrap()),
+        }
+    }
 }
 
 impl PrettyPrint for TImplWitness {
@@ -74,6 +92,12 @@ impl PrettyPrint for TImplWitness {
     }
 }
 
+#[derive(Copy, Clone)]
+pub enum TProvider {
+    Trait(Id<LTrait>),
+    Impl(Id<LImpl>),
+}
+
 impl Typechecker<'_> {
     pub fn do_goal_trait(
         &mut self,
@@ -85,7 +109,7 @@ impl Typechecker<'_> {
     ) -> AResult<Option<TImplWitness>> {
         let ty = self.normalize_ty(ty, ty_span)?;
         let trait_ty = self.normalize_trait_ty(trait_ty, trait_ty_span)?;
-
+        // Conflicting solutions and ambiguities will fail if the type is concrete.
         let is_concrete = self.is_concrete_ty(ty) && self.is_concrete_trait_ty(trait_ty);
 
         debug!(
@@ -96,7 +120,7 @@ impl Typechecker<'_> {
         );
 
         let goal = TGoal::Implements(ty, trait_ty);
-
+        // Recall cache if we've already solved this goal to completion
         if let Some((witness, _)) = self.solved.get(&goal) {
             debug!(
                 "{}We already know that {:?} implements {:?}",
@@ -108,6 +132,9 @@ impl Typechecker<'_> {
             return Ok(Some(witness.clone()));
         }
 
+        // We want to prevent infinite loops looking for nested goals. This is
+        // technically an ambiguity, not an error, and ambiguities are okay if we are
+        // just looking for associated types, etc.
         if self.within_goal(&goal) {
             debug!(
                 "We're within the goal {:?}, bailing",
@@ -126,17 +153,19 @@ impl Typechecker<'_> {
             return Ok(None);
         }
 
+        // Store the solution (and the epoch with its nested assumptions) if a solution
+        // works correctly.
         let mut solution_and_epoch = None;
 
         let tr = trait_ty.lookup(self.ctx).0;
-
-        // Concrete implementation
+        // Hard-coded implementations for `Concrete` and `Into<Dyn<Trait>>` which have
+        // special rules around them!
         if tr == self.ctx.lower_concrete_item()? {
+            // A type will implement Concrete if it's not Dyn.
+            // Other types (e.g. inferences) are ambiguous, except for Skolems (e.g.
+            // Self/generic T) which needs an assumption, e.g. `Self: Concrete`.
             match &*ty.lookup(self.ctx) {
-                TType::Infer(_)
-                | TType::GenericInfer(_)
-                | TType::Associated(_, _, _)
-                | TType::ObjectAccess(_, _) => {
+                TType::Infer(_) | TType::GenericInfer(_) | TType::Associated(_, _, _, _) => {
                     if !ambiguous_ok {
                         self.set_ambiguity(AError::AmbiguousType {
                             ty,
@@ -149,7 +178,8 @@ impl Typechecker<'_> {
                 TType::Skolem(_)
                 | TType::MethodSkolem(_, _)
                 | TType::AssociatedSkolem(_, _, _, _) => {
-                    // Actually, we don't know!
+                    // Actually, we don't know! We'll follow up with
+                    // assumptions.
                 },
                 TType::Int
                 | TType::Float
@@ -173,9 +203,12 @@ impl Typechecker<'_> {
                     self.epoch().progress = true;
 
                     self.solved.insert(goal, (TImplWitness::Concrete, ty_span));
+                    // Let's bail real quick since we know there are no other impls that satisfy
+                    // Concrete (due to language rules around not explicitly impling Concrete)
                     return Ok(Some(TImplWitness::Concrete));
                 },
                 TType::Dynamic(_) => {
+                    // Dyn NEVER implements Concrete
                     return Err(AError::NoSolution {
                         ty,
                         ty_span,
@@ -184,32 +217,33 @@ impl Typechecker<'_> {
                     });
                 },
             }
-        }
-
-        if tr == self.ctx.lower_into_item()? {
+        } else if tr == self.ctx.lower_into_item()? {
+            // Type T in Into<T>, the type we're transmuting _into_
             let into_ty = trait_ty.lookup(self.ctx).1[0];
 
+            // We're looking for Dyn<Trait>.
             match &*into_ty.lookup(self.ctx) {
-                TType::Infer(_)
-                | TType::GenericInfer(_)
-                | TType::Associated(_, _, _)
-                | TType::ObjectAccess(_, _) => {
+                TType::Infer(_) | TType::GenericInfer(_) | TType::Associated(_, _, _, _) => {
+                    // If it's an "ambiguous" type, then we can't tell if it's a Dyn, so bail.
                     if !ambiguous_ok {
                         self.set_ambiguity(AError::AmbiguousType {
                             ty,
                             use_span: ty_span,
                         });
                     }
-
                     return Ok(None);
                 },
                 TType::Dynamic(dyn_trait_ty) => {
+                    // Try doing the `Into<Dyn<Trait>>`. The only requirement is that the given type
+                    // implements the trait inside the Dyn (with all of the associated associated
+                    // type bindings too).
                     let result = self.in_epoch(goal.clone(), |self_| {
                         self_.do_goal_restriction(
                             TRestriction(ty, dyn_trait_ty.clone()),
                             &hashset! {},
                             ty_span,
                         )?;
+
                         Ok(TImplWitness::DynamicCoersion(ty, dyn_trait_ty.clone()))
                     });
 
@@ -218,7 +252,6 @@ impl Typechecker<'_> {
                             if !ambiguous_ok {
                                 self.set_ambiguity(ambiguity);
                             }
-
                             return Ok(None);
                         }
 
@@ -236,22 +269,41 @@ impl Typechecker<'_> {
                                     trait_ty_span,
                                 });
                             }
-
                             return Ok(None);
                         }
                     }
                 },
-                _ => {
-                    // Not trying to look for Into<Dyn<_>>
+                TType::Skolem(_)
+                | TType::MethodSkolem(_, _)
+                | TType::AssociatedSkolem(_, _, _, _)
+                | TType::Int
+                | TType::Float
+                | TType::Char
+                | TType::Bool
+                | TType::String
+                | TType::Never
+                | TType::Array(_)
+                | TType::Tuple(_)
+                | TType::Closure(_, _)
+                | TType::FnPtr(_, _)
+                | TType::Object(_, _)
+                | TType::Enum(_, _) => {
+                    // We're not trying to look for Into<Dyn<_>>, so skip.
                 },
             }
         }
 
+        // Hardcoded rule that every `Dyn<Trait>` implements `Trait` itself, even though
+        // no explicit impl exists, of course.
         if let TType::Dynamic(dyn_trait_ty) = &*ty.lookup(self.ctx) {
+            let TTraitTypeWithBindings(dyn_trait_ty, dyn_bindings) =
+                &*dyn_trait_ty.lookup(self.ctx);
+
             let result = self.in_epoch(goal.clone(), |self_| {
+                // The given trait type needs to unify with the trait ty we're looking for.
                 let trait_ty = self_.unify_trait_ty(
                     UnifyMode::GenericInference(&hashset! {}),
-                    dyn_trait_ty.0,
+                    *dyn_trait_ty,
                     ty_span,
                     trait_ty,
                     trait_ty_span,
@@ -259,7 +311,7 @@ impl Typechecker<'_> {
 
                 Ok(TImplWitness::Dynamic(
                     ty,
-                    TTraitTypeWithBindings(trait_ty, dyn_trait_ty.1.clone()),
+                    TTraitTypeWithBindings(trait_ty, dyn_bindings.clone()).intern(self_.ctx),
                 ))
             });
 
@@ -268,7 +320,6 @@ impl Typechecker<'_> {
                     if !ambiguous_ok {
                         self.set_ambiguity(ambiguity);
                     }
-
                     return Ok(None);
                 }
 
@@ -286,7 +337,6 @@ impl Typechecker<'_> {
                             trait_ty_span,
                         });
                     }
-
                     return Ok(None);
                 }
             }
@@ -302,7 +352,6 @@ impl Typechecker<'_> {
                     if !ambiguous_ok {
                         self.set_ambiguity(ambiguity);
                     }
-
                     return Ok(None);
                 }
 
@@ -320,12 +369,14 @@ impl Typechecker<'_> {
                             trait_ty_span,
                         });
                     }
-
                     return Ok(None);
                 }
             }
         }
 
+        // If we found a solution, then bail. We're allowed to have a solution that
+        // conflicts with one of our assumptions, so don't even try to look for an
+        // assumption-based solution if we've found one already.
         if let Some((solution, epoch)) = solution_and_epoch {
             debug!(
                 "{}!!We proved goal {:?} implements {:?}",
@@ -341,6 +392,7 @@ impl Typechecker<'_> {
             return Ok(Some(solution));
         }
 
+        // See if the trait is satisfied by any of the assumptions of the program.
         if let Some(facts) = self.type_facts.clone() {
             for ((assumed_tr, assumed_ty, assumed_trait_ty), (_, assumed_span)) in
                 &facts.assumptions
@@ -377,7 +429,6 @@ impl Typechecker<'_> {
                         if !ambiguous_ok {
                             self.set_ambiguity(ambiguity);
                         }
-
                         return Ok(None);
                     }
 
@@ -395,7 +446,6 @@ impl Typechecker<'_> {
                                 trait_ty_span,
                             });
                         }
-
                         return Ok(None);
                     }
                 }
@@ -416,8 +466,21 @@ impl Typechecker<'_> {
             self.solved.insert(goal, (solution.clone(), ty_span));
             Ok(Some(solution))
         } else if self.type_facts.is_none() {
-            Ok(None)
+            // If we didn't find a solution, but our type_facts are None, then we've just
+            // started to typecheck the program (e.g. before assumptions are even
+            // processed). Don't bail with an error, but instead allow an iteration by
+            // setting ambiguity.
+            if !ambiguous_ok {
+                self.set_ambiguity(AError::NoSolution {
+                    ty,
+                    ty_span,
+                    trait_ty,
+                    trait_ty_span,
+                });
+            }
+            return Ok(None);
         } else {
+            // If we didn't find a solution, then error out!
             Err(AError::NoSolution {
                 ty,
                 ty_span,
@@ -436,9 +499,9 @@ impl Typechecker<'_> {
     ) -> AResult<Option<TImplWitness>> {
         let info = id.lookup(self.ctx);
 
+        // Set up inferences for the generics that we have in the impl.
         let mut substitutions = btreemap! {};
         let mut allowed = hashset! {};
-
         for g in &info.generics {
             let id = fresh_id();
             allowed.insert(id);
@@ -447,14 +510,12 @@ impl Typechecker<'_> {
         }
 
         let impl_ty = self.initialize_ty(info.ty, &substitutions)?;
-
         debug!(
             "Ok, given {:?} substitutions, we're attempting to unify {:?} + {:?}",
             Pretty(&substitutions, self.ctx),
             Pretty(ty, self.ctx),
             Pretty(impl_ty, self.ctx),
         );
-
         let _ = self.unify_ty(
             UnifyMode::GenericInference(&allowed),
             impl_ty,
@@ -463,19 +524,19 @@ impl Typechecker<'_> {
             span,
         )?;
 
+        // If there's an trait ty, then try to unify that too. Sometimes this doesn't
+        // exist (i.e. inherent impls)... that's fine.
         if let Some((trait_ty, trait_ty_span)) = maybe_trait {
             let impl_trait_ty = self.initialize_trait_ty(
                 info.trait_ty.expect("Expecting impl for a given trait"),
                 &substitutions,
             )?;
-
             debug!(
                 "... ALSO (trait) given {:?} substitutions, we're attempting to unify {:?} + {:?}",
                 Pretty(&substitutions, self.ctx),
                 Pretty(trait_ty, self.ctx),
                 Pretty(impl_trait_ty, self.ctx),
             );
-
             let _ = self.unify_trait_ty(
                 UnifyMode::GenericInference(&allowed),
                 impl_trait_ty,
@@ -483,12 +544,16 @@ impl Typechecker<'_> {
                 trait_ty,
                 trait_ty_span,
             )?;
+        } else {
+            assert!(info.trait_ty.is_none());
         }
 
+        // Satisfy the restrictions of the impl, of course.
         for restriction in self.initialize_restrictions(&info.restrictions, &substitutions)? {
             self.do_goal_restriction(restriction, &allowed, span)?;
         }
 
+        // If any of the generics weren't unified with anything, then bail out!
         for ty in substitutions.values() {
             if let TType::GenericInfer(id) = &*self.normalize_ty(*ty, span)?.lookup(self.ctx) {
                 if allowed.contains(id) {
@@ -507,12 +572,12 @@ impl Typechecker<'_> {
             .try_collect_btreemap()?;
 
         debug!("Mapping = {:?}", Pretty(&substitutions, self.ctx));
-
         Ok(Some(TImplWitness::Impl(id, substitutions)))
     }
 
     pub fn do_goal_associated_type(
         &mut self,
+        key: Id<LType>,
         ty: Id<TType>,
         name: Id<str>,
         span: Span,
@@ -527,15 +592,44 @@ impl Typechecker<'_> {
             Pretty(name, self.ctx)
         );
 
-        let goal = TGoal::AssociatedType(self.module.unwrap(), ty, name);
-
+        // Caching
+        let goal = TGoal::AssociatedType(key);
         if let Some((witness, _)) = self.solved.get(&goal).cloned() {
             return self.instantiate_ty_from_impl(&witness, name, span);
         }
 
         if self.within_goal(&goal) {
             panic!("We should never get here... right?");
-            // return Ok(TType::Associated(ty, None, name).intern(self.ctx));
+        }
+
+        if let Some(provider) = self.assoc_traits.get(&key).cloned() {
+            match provider {
+                TProvider::Impl(id) => {
+                    let (new_solution, new_epoch) =
+                        self.in_epoch(goal, move |self_| self_.do_goal_impl(id, ty, span, None))?;
+
+                    if let Some(ambiguity) = new_epoch.ambiguity {
+                        debug!(
+                            "Hit an ambiguity {:?}, bailing",
+                            Pretty(&ambiguity, self.ctx)
+                        );
+
+                        return Ok(TType::Associated(key, ty, None, name).intern(self.ctx));
+                    }
+
+                    return self.do_goal_associated_type_impl(
+                        key,
+                        ty,
+                        name,
+                        new_epoch,
+                        new_solution.expect("Should not be None if not ambiguous"),
+                        span,
+                    );
+                },
+                TProvider::Trait(tr) => {
+                    return self.do_goal_associated_type_trait(key, ty, tr, name, span);
+                },
+            }
         }
 
         let mut solution_and_epoch = None;
@@ -546,9 +640,7 @@ impl Typechecker<'_> {
                 continue;
             }
 
-            let result = self.in_epoch(goal.clone(), move |self_| {
-                self_.do_goal_impl(*id, ty, span, None)
-            });
+            let result = self.in_epoch(goal, move |self_| self_.do_goal_impl(*id, ty, span, None));
 
             if let Ok((new_solution, new_epoch)) = result {
                 if let Some(ambiguity) = new_epoch.ambiguity {
@@ -557,7 +649,7 @@ impl Typechecker<'_> {
                         Pretty(&ambiguity, self.ctx)
                     );
 
-                    return Ok(TType::Associated(ty, None, name).intern(self.ctx));
+                    return Ok(TType::Associated(key, ty, None, name).intern(self.ctx));
                 }
 
                 if !merge_solution(
@@ -566,24 +658,13 @@ impl Typechecker<'_> {
                     new_solution.expect("Should not be None if not ambiguous"),
                     new_epoch,
                 )? {
-                    return Ok(TType::Associated(ty, None, name).intern(self.ctx));
+                    return Ok(TType::Associated(key, ty, None, name).intern(self.ctx));
                 }
             }
         }
 
         if let Some((solution, epoch)) = solution_and_epoch {
-            debug!(
-                "{}!!We proved goal {:?} has associated type {:?}",
-                "  ".repeat(self.epochs.len() - 1),
-                Pretty(ty, self.ctx),
-                Pretty(name, self.ctx)
-            );
-
-            self.commit_epoch(epoch);
-            self.epoch().progress = true;
-
-            self.solved.insert(goal, (solution.clone(), span));
-            return self.instantiate_ty_from_impl(&solution, name, span);
+            return self.do_goal_associated_type_impl(key, ty, name, epoch, solution, span);
         }
 
         let mut candidate_tr = None;
@@ -602,21 +683,62 @@ impl Typechecker<'_> {
         }
 
         if let Some(tr) = candidate_tr {
-            if tr.lookup(self.ctx).generics.len() > 0 {
-                todo!("Die");
-            }
-
-            let trait_ty = TTraitType(tr, vec![]).intern(self.ctx);
-
-            if let Some(witness) = self.do_goal_trait(ty, span, trait_ty, span, true)? {
-                self.epoch().progress = true;
-                self.solved.insert(goal, (witness.clone(), span));
-                self.instantiate_ty_from_impl(&witness, name, span)
-            } else {
-                Ok(TType::Associated(ty, Some(trait_ty), name).intern(self.ctx))
-            }
+            self.do_goal_associated_type_trait(key, ty, tr, name, span)
         } else {
             todo!("Die");
+        }
+    }
+
+    pub fn do_goal_associated_type_impl(
+        &mut self,
+        key: Id<LType>,
+        ty: Id<TType>,
+        name: Id<str>,
+        epoch: TEpoch,
+        solution: TImplWitness,
+        span: Span,
+    ) -> AResult<Id<TType>> {
+        debug!(
+            "{}!!We proved goal {:?} has associated type {:?}",
+            "  ".repeat(self.epochs.len() - 1),
+            Pretty(ty, self.ctx),
+            Pretty(name, self.ctx)
+        );
+
+        self.commit_epoch(epoch);
+        self.epoch().progress = true;
+
+        self.assoc_traits
+            .insert(key, solution.as_provider(self.ctx));
+        self.solved
+            .insert(TGoal::AssociatedType(key), (solution.clone(), span));
+
+        self.instantiate_ty_from_impl(&solution, name, span)
+    }
+
+    pub fn do_goal_associated_type_trait(
+        &mut self,
+        key: Id<LType>,
+        ty: Id<TType>,
+        tr: Id<LTrait>,
+        name: Id<str>,
+        span: Span,
+    ) -> AResult<Id<TType>> {
+        if tr.lookup(self.ctx).generics.len() > 0 {
+            todo!("Die");
+        }
+
+        self.assoc_traits.insert(key, TProvider::Trait(tr));
+
+        let trait_ty = TTraitType(tr, vec![]).intern(self.ctx);
+
+        if let Some(witness) = self.do_goal_trait(ty, span, trait_ty, span, true)? {
+            self.epoch().progress = true;
+            self.solved
+                .insert(TGoal::AssociatedType(key), (witness.clone(), span));
+            self.instantiate_ty_from_impl(&witness, name, span)
+        } else {
+            Ok(TType::Associated(key, ty, Some(trait_ty), name).intern(self.ctx))
         }
     }
 
@@ -657,22 +779,70 @@ impl Typechecker<'_> {
 
         if self.within_goal(&goal) {
             panic!("We should never get here... right?");
-            // self.set_ambiguity(AError::AmbiguousMethod { call_ty, name, span
-            // }); return Ok(None);
+        }
+
+        if let Some(provider) = self.method_traits.get(&key).copied() {
+            match provider {
+                TProvider::Impl(id) => {
+                    let (new_solution, new_epoch) = self.in_epoch(goal.clone(), move |self_| {
+                        self_.do_goal_impl(id, call_ty, span, None)
+                    })?;
+
+                    if let Some(ambiguity) = new_epoch.ambiguity {
+                        debug!(
+                            "Hit an ambiguity {:?}, bailing",
+                            Pretty(&ambiguity, self.ctx)
+                        );
+
+                        self.set_ambiguity(AError::AmbiguousMethod {
+                            call_ty,
+                            name,
+                            span,
+                        });
+
+                        return Ok(None);
+                    }
+
+                    return self.do_goal_method_selection_impl(
+                        key,
+                        has_self,
+                        call_ty,
+                        name,
+                        fn_generic_tys,
+                        param_tys,
+                        return_ty,
+                        param_spans,
+                        new_epoch,
+                        new_solution.expect("Should not be None if not ambiguous"),
+                        span,
+                    );
+                },
+                TProvider::Trait(tr) =>
+                    return self.do_goal_method_selection_trait(
+                        key,
+                        has_self,
+                        call_ty,
+                        tr,
+                        name,
+                        fn_generic_tys,
+                        param_tys,
+                        return_ty,
+                        param_spans,
+                        span,
+                    ),
+            }
         }
 
         let mut solution_and_epoch = None;
 
         for id in &*self.ctx.get_inherent_impls()? {
-            // We only care about impls that provide the associated type we're looking for.
+            // We only care about impls that have the given method name, and are `has_self`
+            // if we're `has_self`
             match id.lookup(self.ctx).methods.get(&name) {
-                None => {
+                Some(method) if method.has_self || !has_self => {},
+                _ => {
                     continue;
                 },
-                Some(method) if has_self && !method.has_self => {
-                    continue;
-                },
-                _ => {},
             }
 
             let result = self.in_epoch(goal.clone(), move |self_| {
@@ -713,22 +883,19 @@ impl Typechecker<'_> {
         }
 
         if let Some((solution, epoch)) = solution_and_epoch {
-            let (expected, expected_span) = self.get_generics_parity(&solution, name);
-            let fn_generic_tys =
-                self.check_generics_parity(key, fn_generic_tys, span, expected, expected_span)?;
-
-            debug!(
-                "{}!!We proved goal {:?} has method {:?}",
-                "  ".repeat(self.epochs.len() - 1),
-                Pretty(call_ty, self.ctx),
-                Pretty(name, self.ctx)
+            return self.do_goal_method_selection_impl(
+                key,
+                has_self,
+                call_ty,
+                name,
+                fn_generic_tys,
+                param_tys,
+                return_ty,
+                param_spans,
+                epoch,
+                solution,
+                span,
             );
-
-            self.commit_epoch(epoch);
-            self.epoch().progress = true;
-
-            self.solved.insert(goal, (solution.clone(), span));
-            return Ok(Some((solution, fn_generic_tys)));
         }
 
         let mut candidate_tr = None;
@@ -769,54 +936,18 @@ impl Typechecker<'_> {
         }
 
         if let Some(tr) = candidate_tr {
-            let info = tr.lookup(self.ctx);
-
-            // Either get cached trait types, or make N new ones
-            // (for N generics in the trait)
-            let trait_generic_tys = if let Some(trait_generic_tys) = self.trait_generics.get(&key) {
-                trait_generic_tys.clone()
-            } else {
-                let generics: Vec<_> = (0..info.generics.len())
-                    .map(|_| self.fresh_infer_ty(span))
-                    .collect();
-                self.trait_generics.insert(key, generics.clone());
-                generics
-            };
-            let trait_ty = TTraitType(tr, trait_generic_tys).intern(self.ctx);
-
-            let method_info = &info.methods[&name];
-            let fn_generic_tys = self.check_generics_parity(
+            self.do_goal_method_selection_trait(
                 key,
-                fn_generic_tys,
-                span,
-                method_info.generics.len(),
-                method_info.span,
-            )?;
-
-            self.do_goal_trait_call_unification(
+                has_self,
                 call_ty,
-                trait_ty,
+                tr,
                 name,
-                &fn_generic_tys,
-                &param_tys,
+                fn_generic_tys,
+                param_tys,
                 return_ty,
-                &param_spans,
+                param_spans,
                 span,
-            )?;
-
-            if let Some(witness) = self.do_goal_trait(call_ty, span, trait_ty, span, true)? {
-                self.epoch().progress = true;
-                self.solved.insert(goal, (witness.clone(), span));
-                return Ok(Some((witness, fn_generic_tys)));
-            } else {
-                self.set_ambiguity(AError::AmbiguousMethod {
-                    call_ty,
-                    name,
-                    span,
-                });
-
-                Ok(None)
-            }
+            )
         } else {
             debug!("No candidate");
             Err(AError::AmbiguousMethod {
@@ -824,6 +955,109 @@ impl Typechecker<'_> {
                 name,
                 span,
             })
+        }
+    }
+
+    pub fn do_goal_method_selection_impl(
+        &mut self,
+        key: Id<LExpression>,
+        _has_self: bool,
+        call_ty: Id<TType>,
+        name: Id<str>,
+        fn_generic_tys: &[Id<TType>],
+        _param_tys: &[Id<TType>],
+        _return_ty: Id<TType>,
+        _param_spans: &[Span],
+        epoch: TEpoch,
+        solution: TImplWitness,
+        span: Span,
+    ) -> AResult<Option<(TImplWitness, Vec<Id<TType>>)>> {
+        let (expected, expected_span) = self.get_generics_parity(&solution, name);
+        let fn_generic_tys =
+            self.check_generics_parity(key, fn_generic_tys, span, expected, expected_span)?;
+
+        debug!(
+            "{}!!We proved goal {:?} has method {:?}",
+            "  ".repeat(self.epochs.len() - 1),
+            Pretty(call_ty, self.ctx),
+            Pretty(name, self.ctx)
+        );
+
+        self.commit_epoch(epoch);
+        self.epoch().progress = true;
+
+        self.method_traits
+            .insert(key, solution.as_provider(self.ctx));
+        self.solved
+            .insert(TGoal::Method(key), (solution.clone(), span));
+        return Ok(Some((solution, fn_generic_tys)));
+    }
+
+    pub fn do_goal_method_selection_trait(
+        &mut self,
+        key: Id<LExpression>,
+        _has_self: bool,
+        call_ty: Id<TType>,
+        tr: Id<LTrait>,
+        name: Id<str>,
+        fn_generic_tys: &[Id<TType>],
+        param_tys: &[Id<TType>],
+        return_ty: Id<TType>,
+        param_spans: &[Span],
+        span: Span,
+    ) -> AResult<Option<(TImplWitness, Vec<Id<TType>>)>> {
+        let info = tr.lookup(self.ctx);
+
+        // Cache this
+        self.method_traits.insert(key, TProvider::Trait(tr));
+
+        // Either get cached trait types, or make N new ones
+        // (for N generics in the trait)
+        let trait_generic_tys = if let Some(trait_generic_tys) = self.trait_generics.get(&key) {
+            trait_generic_tys.clone()
+        } else {
+            let generics: Vec<_> = (0..info.generics.len())
+                .map(|_| self.fresh_infer_ty(span))
+                .collect();
+            self.trait_generics.insert(key, generics.clone());
+            generics
+        };
+
+        let trait_ty = TTraitType(tr, trait_generic_tys).intern(self.ctx);
+
+        let method_info = &info.methods[&name];
+        let fn_generic_tys = self.check_generics_parity(
+            key,
+            fn_generic_tys,
+            span,
+            method_info.generics.len(),
+            method_info.span,
+        )?;
+
+        self.do_goal_trait_call_unification(
+            call_ty,
+            trait_ty,
+            name,
+            &fn_generic_tys,
+            &param_tys,
+            return_ty,
+            &param_spans,
+            span,
+        )?;
+
+        if let Some(witness) = self.do_goal_trait(call_ty, span, trait_ty, span, true)? {
+            self.epoch().progress = true;
+            self.solved
+                .insert(TGoal::Method(key), (witness.clone(), span));
+            return Ok(Some((witness, fn_generic_tys)));
+        } else {
+            self.set_ambiguity(AError::AmbiguousMethod {
+                call_ty,
+                name,
+                span,
+            });
+
+            Ok(None)
         }
     }
 
@@ -903,19 +1137,22 @@ impl Typechecker<'_> {
 
     pub fn do_goal_restriction(
         &mut self,
-        TRestriction(r_ty, TTraitTypeWithBindings(r_trait_ty, extra_bindings)): TRestriction,
+        restriction: TRestriction,
         allowed: &HashSet<InferId>,
         span: Span,
     ) -> AResult<()> {
-        if let Some(witness) = self.do_goal_trait(r_ty, span, r_trait_ty, span, false)? {
+        let TRestriction(r_ty, r_trait_ty) = restriction;
+        let TTraitTypeWithBindings(r_trait_ty, extra_bindings) = &*r_trait_ty.lookup(self.ctx);
+
+        if let Some(witness) = self.do_goal_trait(r_ty, span, *r_trait_ty, span, false)? {
             for (name, expected_ty) in extra_bindings {
-                let found_ty = self.instantiate_ty_from_impl(&witness, name, span)?;
+                let found_ty = self.instantiate_ty_from_impl(&witness, *name, span)?;
 
                 let _ = self.unify_ty(
                     UnifyMode::GenericInference(allowed),
                     found_ty,
                     span,
-                    expected_ty,
+                    *expected_ty,
                     span,
                 )?;
             }
@@ -928,10 +1165,7 @@ impl Typechecker<'_> {
         let ty = self.normalize_ty(ty, span)?;
 
         match &*ty.lookup(self.ctx) {
-            TType::Infer(_)
-            | TType::GenericInfer(_)
-            | TType::Associated(_, _, _)
-            | TType::ObjectAccess(_, _) => {
+            TType::Infer(_) | TType::GenericInfer(_) | TType::Associated(_, _, _, _) => {
                 self.set_ambiguity(AError::AmbiguousType { use_span: span, ty });
             },
             TType::Skolem(_)
@@ -958,6 +1192,7 @@ impl Typechecker<'_> {
                 self.do_goal_well_formed(*r, span)?;
             },
             TType::Dynamic(trait_ty) => {
+                let trait_ty = trait_ty.lookup(self.ctx);
                 // The Dyn type has to, de novo, satisfy the given trait restrictions
                 let TTraitType(tr, trait_generics) = &*trait_ty.0.lookup(self.ctx);
 
@@ -1019,30 +1254,32 @@ impl Typechecker<'_> {
         ty: Id<TType>,
         name: Id<str>,
         span: Span,
-    ) -> AResult<Id<TType>> {
+    ) -> AResult<Option<Id<TType>>> {
         let ty = self.normalize_ty(ty, span)?;
 
         match &*ty.lookup(self.ctx) {
-            TType::GenericInfer(_)
-            | TType::Infer(_)
-            | TType::Associated(_, _, _)
-            | TType::ObjectAccess(_, _) => {
+            TType::GenericInfer(_) | TType::Infer(_) | TType::Associated(..) => {
                 self.set_ambiguity(AError::CannotAccess { ty, name, span });
-                Ok(TType::ObjectAccess(ty, Either::Left(name)).intern(self.ctx))
+                Ok(None)
             },
             TType::Object(o, gs) => {
                 let info = o.lookup(self.ctx);
 
-                self.get_member(
-                    ty,
-                    &info.members,
-                    Either::Left(name),
-                    &ZipExact::zip_exact(info.generics.iter().map(|g| g.id), gs.iter().copied())
+                Ok(Some(
+                    self.get_member(
+                        ty,
+                        &info.members,
+                        Either::Left(name),
+                        &ZipExact::zip_exact(
+                            info.generics.iter().map(|g| g.id),
+                            gs.iter().copied(),
+                        )
                         .collect(),
-                    span,
-                )
+                        span,
+                    )?,
+                ))
             },
-            TType::AssociatedSkolem(_, _, _, _)
+            TType::AssociatedSkolem(..)
             | TType::Skolem(_)
             | TType::MethodSkolem(..)
             | TType::Int
@@ -1065,31 +1302,33 @@ impl Typechecker<'_> {
         ty: Id<TType>,
         idx: usize,
         span: Span,
-    ) -> AResult<Id<TType>> {
+    ) -> AResult<Option<Id<TType>>> {
         let ty = self.normalize_ty(ty, span)?;
 
         match &*ty.lookup(self.ctx) {
-            TType::GenericInfer(_)
-            | TType::Infer(_)
-            | TType::Associated(_, _, _)
-            | TType::ObjectAccess(_, _) => {
+            TType::GenericInfer(_) | TType::Infer(_) | TType::Associated(..) => {
                 self.set_ambiguity(AError::CannotAccessIdx { ty, idx, span });
-                Ok(TType::ObjectAccess(ty, Either::Right(idx)).intern(self.ctx))
+                Ok(None)
             },
-            TType::Tuple(tys) if idx < tys.len() => Ok(tys[idx]),
+            TType::Tuple(tys) if idx < tys.len() => Ok(Some(tys[idx])),
             TType::Object(o, gs) => {
                 let info = o.lookup(self.ctx);
 
-                self.get_member(
-                    ty,
-                    &info.members,
-                    Either::Right(idx),
-                    &ZipExact::zip_exact(info.generics.iter().map(|g| g.id), gs.iter().copied())
+                Ok(Some(
+                    self.get_member(
+                        ty,
+                        &info.members,
+                        Either::Right(idx),
+                        &ZipExact::zip_exact(
+                            info.generics.iter().map(|g| g.id),
+                            gs.iter().copied(),
+                        )
                         .collect(),
-                    span,
-                )
+                        span,
+                    )?,
+                ))
             },
-            TType::AssociatedSkolem(_, _, _, _)
+            TType::AssociatedSkolem(..)
             | TType::Skolem(_)
             | TType::MethodSkolem(..)
             | TType::Int
@@ -1137,7 +1376,12 @@ impl Typechecker<'_> {
                 (info.methods[&name].generics.len(), info.methods[&name].span)
             },
             TImplWitness::Dynamic(_, trait_ty) => {
-                let info = trait_ty.0.lookup(self.ctx).0.lookup(self.ctx);
+                let info = trait_ty
+                    .lookup(self.ctx)
+                    .0
+                    .lookup(self.ctx)
+                    .0
+                    .lookup(self.ctx);
                 (info.methods[&name].generics.len(), info.methods[&name].span)
             },
             TImplWitness::DynamicCoersion(..) => (
@@ -1183,9 +1427,13 @@ impl Typechecker<'_> {
         }
     }
 
-    pub fn do_goal_object_safety(&mut self, tr: Id<LTrait>, use_span: Span) -> AResult<()> {
-        if self.object_safe_traits.contains(&tr) {
-            return Ok(());
+    pub fn do_goal_object_safety(
+        &mut self,
+        tr: Id<LTrait>,
+        use_span: Span,
+    ) -> AResult<Arc<HashMap<Id<str>, usize>>> {
+        if let Some(ordering) = self.object_safe_traits.get(&tr) {
+            return Ok(ordering.clone());
         }
 
         let info = tr.lookup(self.ctx);
@@ -1213,7 +1461,7 @@ impl Typechecker<'_> {
                 use_span,
             )?;
             self.check_object_safety_trait_ty_with_bindings(
-                &trait_ty,
+                trait_ty,
                 self_ty,
                 self_trait_ty,
                 tr.lookup(self.ctx).span,
@@ -1226,7 +1474,7 @@ impl Typechecker<'_> {
                 let trait_ty_span = trait_ty.lookup(self.ctx).span;
                 let trait_ty = self.initialize_trait_ty_with_bindings(*trait_ty, &btreemap! {})?;
                 self.check_object_safety_trait_ty_with_bindings(
-                    &trait_ty,
+                    trait_ty,
                     self_ty,
                     self_trait_ty,
                     trait_ty_span,
@@ -1235,12 +1483,19 @@ impl Typechecker<'_> {
             }
         }
 
+        let mut methods = vec![];
+
         for method in info.methods.values() {
             let mut is_concrete = false;
 
             // This method is object-safe if it has `Self: Concrete`
             for (ty, restriction) in &method.restrictions {
-                debug!("self_skolem={:?}, ty = {:?}, restriction = {:?}", Pretty(info.self_skolem, self.ctx), Pretty(ty, self.ctx), Pretty(restriction, self.ctx));
+                debug!(
+                    "self_skolem={:?}, ty = {:?}, restriction = {:?}",
+                    Pretty(info.self_skolem, self.ctx),
+                    Pretty(ty, self.ctx),
+                    Pretty(restriction, self.ctx)
+                );
 
                 match (&ty.lookup(self.ctx).data, &restriction.lookup(self.ctx)) {
                     (LTypeData::SelfSkolem(self_skolem), trait_ty)
@@ -1285,7 +1540,7 @@ impl Typechecker<'_> {
                     use_span,
                 )?;
                 self.check_object_safety_trait_ty_with_bindings(
-                    &trait_ty,
+                    trait_ty,
                     self_ty,
                     self_trait_ty,
                     tr.lookup(self.ctx).span,
@@ -1301,11 +1556,20 @@ impl Typechecker<'_> {
                 method.return_ty.lookup(self.ctx).span,
                 use_span,
             )?;
+
+            methods.push(method.name);
         }
 
-        self.object_safe_traits.insert(tr);
+        let ordering: Arc<HashMap<_, _>> = Arc::new(
+            methods
+                .into_iter()
+                .enumerate()
+                .map(|(i, n)| (n, i))
+                .collect(),
+        );
+        self.object_safe_traits.insert(tr, ordering.clone());
 
-        Ok(())
+        Ok(ordering)
     }
 
     fn check_object_safety_ty(
@@ -1320,9 +1584,8 @@ impl Typechecker<'_> {
             TType::MethodSkolem(_, _)
             | TType::GenericInfer(_)
             | TType::Infer(_)
-            | TType::ObjectAccess(_, _)
-            | TType::Associated(_, None, _) => unreachable!(),
-            TType::Associated(ty, Some(trait_ty), _)
+            | TType::Associated(_, _, None, _) => unreachable!(),
+            TType::Associated(_, ty, Some(trait_ty), _)
             | TType::AssociatedSkolem(_, ty, trait_ty, _)
                 if *ty == self_ty && *trait_ty == self_trait_ty =>
             { /* Always object-safe */ }
@@ -1343,9 +1606,9 @@ impl Typechecker<'_> {
                 self.check_object_safety_tys(&ps, self_ty, self_trait_ty, def_span, use_span)?;
                 self.check_object_safety_ty(*r, self_ty, self_trait_ty, def_span, use_span)?;
             },
-            TType::Dynamic(tr) => {
+            TType::Dynamic(trait_ty) => {
                 self.check_object_safety_trait_ty_with_bindings(
-                    tr,
+                    *trait_ty,
                     self_ty,
                     self_trait_ty,
                     def_span,
@@ -1384,12 +1647,14 @@ impl Typechecker<'_> {
 
     fn check_object_safety_trait_ty_with_bindings(
         &mut self,
-        TTraitTypeWithBindings(trait_ty, bindings): &TTraitTypeWithBindings,
+        trait_ty: Id<TTraitTypeWithBindings>,
         self_ty: Id<TType>,
         self_trait_ty: Id<TTraitType>,
         def_span: Span,
         use_span: Span,
     ) -> AResult<()> {
+        let TTraitTypeWithBindings(trait_ty, bindings) = &*trait_ty.lookup(self.ctx);
+
         for ty in &trait_ty.lookup(self.ctx).1 {
             self.check_object_safety_ty(*ty, self_ty, self_trait_ty, def_span, use_span)?;
         }

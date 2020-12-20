@@ -1,10 +1,12 @@
 use crate::{
     lexer::Span,
-    parser::{PLiteral, PPattern, PPatternConstructorArguments, PPatternData},
+    parser::{PPattern, PPatternConstructorArguments, PPatternData},
     util::{AError, AResult, Id, Intern, LId},
 };
 
-use super::{LConstructorShape, LEnum, LObject, LScopeItem, LType, LVariable, LoweringContext};
+use super::{
+    LConstructorShape, LEnum, LLiteral, LObject, LScopeItem, LType, LVariable, LoweringContext,
+};
 
 #[derive(Debug, Hash, Eq, PartialEq, Lookup, PrettyPrint)]
 pub struct LPattern {
@@ -18,7 +20,7 @@ pub struct LPattern {
 #[derive(Debug, Hash, Eq, PartialEq, PrettyPrint)]
 pub enum LPatternData {
     Underscore(Id<LType>),
-    Literal(PLiteral),
+    Literal(LLiteral),
     Variable(LVariable),
     Tuple(Vec<Id<LPattern>>),
     EnumVariantPattern(LId<LEnum>, Vec<Id<LType>>, Id<str>, Vec<Id<LPattern>>),
@@ -37,7 +39,7 @@ impl LoweringContext<'_> {
 
         let data = match data {
             PPatternData::Underscore => LPatternData::Underscore(self.fresh_infer_ty(*span)),
-            PPatternData::Literal(l) => LPatternData::Literal(*l),
+            PPatternData::Literal(l) => LPatternData::Literal(self.lower_literal(*l, *span)?),
             PPatternData::Identifier(v) => {
                 let v = self.declare_variable(
                     *v,

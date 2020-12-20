@@ -23,14 +23,14 @@ pub struct LExpression {
 
 #[derive(Debug, Hash, Eq, PartialEq, PrettyPrint)]
 pub enum LExpressionData {
-    Literal(PLiteral),
+    Literal(LLiteral),
     Variable(LVariable),
     Block(Vec<Id<LStatement>>, Id<LExpression>),
     AsyncBlock(LVariableContext, Id<LExpression>, Id<LType>),
     Global(LId<LGlobal>),
     GlobalFunction(LId<LFunction>, Vec<Id<LType>>),
-    Access(Id<LExpression>, Span, Id<str>),
-    IndexAccess(Id<LExpression>, Span, usize),
+    Access(Id<LExpression>, Span, Id<str>, Id<LType>),
+    IndexAccess(Id<LExpression>, Span, usize, Id<LType>),
     Tuple(Vec<Id<LExpression>>),
     ArrayLiteral(Vec<Id<LExpression>>, Id<LType>),
     Assign(Id<LExpression>, Id<LExpression>),
@@ -69,6 +69,16 @@ pub enum LExpressionData {
     Match(Id<LExpression>, Vec<(Id<LPattern>, Id<LExpression>)>),
 }
 
+#[derive(Copy, Clone, Debug, Hash, Eq, PartialEq, PrettyPrint)]
+pub enum LLiteral {
+    True,
+    False,
+    String(Id<str>),
+    Int(i64),
+    Float(u64 /* as bits */),
+    Char(char),
+}
+
 #[derive(Debug, Hash, Eq, PartialEq, Lookup, PrettyPrint)]
 pub struct LStatement {
     #[plain]
@@ -88,6 +98,8 @@ impl LoweringContext<'_> {
         let PExpression { span, data } = &*e.lookup(self.ctx);
 
         let data = match data {
+            PExpressionData::Literal(lit) =>
+                LExpressionData::Literal(self.lower_literal(*lit, *span)?),
             PExpressionData::Unimplemented =>
             // Lower into the `std::unimplemented::<T>()` fn call
                 if let LScopeItem::Function(unimplemented) = self.ctx.std_item("unimplemented") {
@@ -192,7 +204,6 @@ impl LoweringContext<'_> {
                     *span,
                 )
             },
-            PExpressionData::Literal(l) => LExpressionData::Literal(*l),
             PExpressionData::InfiniteRange(a) => {
                 let a = self.lower_expr(*a)?;
                 let b = self.get_range_bound(*span, e, "Unbounded", vec![]);
@@ -339,7 +350,7 @@ impl LoweringContext<'_> {
                 let l = LExpression {
                     source: e,
                     span: *span,
-                    data: LExpressionData::Literal(PLiteral::String(*l)),
+                    data: LExpressionData::Literal(LLiteral::String(*l)),
                 }
                 .intern(self.ctx);
                 let s = self.lower_expr(*s)?;
@@ -364,7 +375,7 @@ impl LoweringContext<'_> {
                 let l = LExpression {
                     source: e,
                     span: *span,
-                    data: LExpressionData::Literal(PLiteral::String(*l)),
+                    data: LExpressionData::Literal(LLiteral::String(*l)),
                 }
                 .intern(self.ctx);
                 let a = self.lower_expr(*a)?;
@@ -420,7 +431,7 @@ impl LoweringContext<'_> {
                 let l = LExpression {
                     source: e,
                     span: *span,
-                    data: LExpressionData::Literal(PLiteral::String(*l)),
+                    data: LExpressionData::Literal(LLiteral::String(*l)),
                 }
                 .intern(self.ctx);
                 let a = self.lower_expr(*a)?;
@@ -782,7 +793,7 @@ impl LoweringContext<'_> {
                 )
             },
             PExpressionData::NamedAccess(o, span, i) =>
-                LExpressionData::Access(self.lower_expr(*o)?, *span, *i),
+                LExpressionData::Access(self.lower_expr(*o)?, *span, *i, self.fresh_infer_ty(*span)),
             PExpressionData::IndexAccess(o, span, i) => {
                 let i = i.lookup(self.ctx).parse().map_err(|_| AError::NotANumber {
                     kind: "tuple index",
@@ -790,7 +801,12 @@ impl LoweringContext<'_> {
                     span: *span,
                 })?;
 
-                LExpressionData::IndexAccess(self.lower_expr(*o)?, *span, i)
+                LExpressionData::IndexAccess(
+                    self.lower_expr(*o)?,
+                    *span,
+                    i,
+                    self.fresh_infer_ty(*span),
+                )
             },
             PExpressionData::Await(a) => {
                 if !self.scopes.last().unwrap().await_allowed {
@@ -827,6 +843,31 @@ impl LoweringContext<'_> {
             data,
         }
         .intern(self.ctx))
+    }
+
+    pub fn lower_literal(&self, lit: PLiteral, span: Span) -> AResult<LLiteral> {
+        Ok(match lit {
+            PLiteral::True => LLiteral::True,
+            PLiteral::False => LLiteral::False,
+            PLiteral::String(s) => LLiteral::String(s),
+            PLiteral::Char(c) => LLiteral::Char(c),
+            PLiteral::Int(s) =>
+                LLiteral::Int(s.lookup(self.ctx).parse().map_err(|_| AError::NotANumber {
+                    kind: "integer literal",
+                    number: s,
+                    span,
+                })?),
+            PLiteral::Float(s) =>
+            // Transmute the f64 into bits, since f64 is not hash, eq, etc. and we only care about
+            // the _exact_ bitwise representation when impling this operation for LLiteral
+                LLiteral::Float(f64::to_bits(s.lookup(self.ctx).parse().map_err(|_| {
+                    AError::NotANumber {
+                        kind: "float literal",
+                        number: s,
+                        span,
+                    }
+                })?)),
+        })
     }
 
     /// Lower the provided information into a call which references a static

@@ -189,7 +189,7 @@ impl Typechecker<'_> {
         tr: Id<LTrait>,
         generics: &[Id<TType>],
         name: Id<str>,
-    ) -> AResult<Vec<TTraitTypeWithBindings>> {
+    ) -> AResult<Vec<Id<TTraitTypeWithBindings>>> {
         let info = tr.lookup(self.ctx);
 
         let substitutions = &info
@@ -228,7 +228,7 @@ impl Typechecker<'_> {
             TImplWitness::Dynamic(_, trait_ty) => self.normalize_ty(
                 // Just get the ty directly from the dyn type. There really should be no need to
                 // normalize it, but let's just normalize it for good measure!
-                trait_ty.1[&name],
+                trait_ty.lookup(self.ctx).1[&name],
                 span,
             ),
             TImplWitness::DynamicCoersion(..) | TImplWitness::Concrete => {
@@ -270,7 +270,7 @@ impl Typechecker<'_> {
             TImplWitness::Assumption(tr, ty, trait_ty) =>
                 self.instantiate_trait_fn(*ty, *tr, &trait_ty.lookup(self.ctx).1, name, fn_generics),
             TImplWitness::Dynamic(ty, trait_ty) => {
-                let TTraitType(tr, trait_generics) = &*trait_ty.0.lookup(self.ctx);
+                let TTraitType(tr, trait_generics) = &*trait_ty.lookup(self.ctx).0.lookup(self.ctx);
                 self.instantiate_trait_fn(*ty, *tr, &trait_generics, name, fn_generics)
             },
             TImplWitness::DynamicCoersion(ty, trait_ty) => {

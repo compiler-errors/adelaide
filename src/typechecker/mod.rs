@@ -7,24 +7,23 @@ mod solve;
 mod ty;
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     sync::Arc,
 };
 
 use crate::{
     ctx::AdelaideContext,
     lexer::Span,
-    lowering::{InferId, LExpression, LModule, LTrait, LoopId, VariableId},
-    util::{AError, AResult, Id, TryCollectBTreeMap},
+    lowering::{GenericId, InferId, LExpression, LModule, LTrait, LType, LoopId, VariableId},
+    util::{AError, AResult, Id, Intern, TryCollectBTreeMap, TryCollectHashMap},
 };
 
-use self::facts::TFacts;
+use self::{facts::TFacts, solve::TProvider};
 pub use impls::{get_impls_for_trait, get_inherent_impls, get_traits_accessible_in_module};
 pub use solve::TImplWitness;
-use ty::TTraitTypeWithBindings;
-pub use ty::{TTraitType, TType};
+pub use ty::{TTraitType, TTraitTypeWithBindings, TType};
 
-pub fn typecheck_program(ctx: &dyn AdelaideContext) -> AResult<()> {
+pub fn typecheck_program_result(ctx: &dyn AdelaideContext) -> AResult<()> {
     let mut t = Typechecker::new(ctx);
 
     t.initialize_facts()?;
@@ -36,20 +35,47 @@ pub fn typecheck_program(ctx: &dyn AdelaideContext) -> AResult<()> {
     Ok(())
 }
 
-struct Typechecker<'ctx> {
-    ctx: &'ctx dyn AdelaideContext,
-    module: Option<Id<LModule>>,
-    type_facts: Option<Arc<TFacts>>,
+pub fn typecheck_program(ctx: &dyn AdelaideContext) -> AResult<Typechecker> {
+    let mut t = Typechecker::new(ctx);
 
+    t.initialize_facts()?;
+
+    for m in &*ctx.lower_mods()? {
+        t.typecheck_module(*m)?;
+    }
+
+    Ok(t)
+}
+
+pub struct Typechecker<'ctx> {
+    ctx: &'ctx dyn AdelaideContext,
+    /// The current module we're typechecking inside
+    module: Option<Id<LModule>>,
+    /// The "facts" of the program, currently consisting of assumptions made by
+    /// the program.
+    type_facts: Option<Arc<TFacts>>,
+    /// Global substitutions that apply during monomorphization
+    global_substitutions: Option<BTreeMap<GenericId, Id<TType>>>,
+
+    // -- Facts that we learn from the generic program, that we can share for later -- //
+    object_safe_traits: HashMap<Id<LTrait>, Arc<HashMap<Id<str>, usize>>>,
+    assoc_traits: HashMap<Id<LType>, TProvider>,
+    method_traits: HashMap<Id<LExpression>, TProvider>,
+
+    /// Span from which an inference originates, for error checking purposes
     infer_spans: HashMap<InferId, Span>,
+    /// Variables which are used for typechecking, known to exist
     variables: HashMap<VariableId, Id<TType>>,
+    /// Return types which are used for typechecking, known to exist
     return_tys: Vec<(Id<TType>, Span)>,
+    /// Loop "return" types which are used for typechecking, known to exist
     loop_tys: HashMap<LoopId, (Id<TType>, Span)>,
 
+    // Epochs of nested type assumptions that are used for complex type inference when traits are
+    // involved
     epochs: Vec<TEpoch>,
 
     solved: HashMap<TGoal, (TImplWitness, Span)>,
-    object_safe_traits: HashSet<Id<LTrait>>,
     function_generics: HashMap<Id<LExpression>, Vec<Id<TType>>>,
     trait_generics: HashMap<Id<LExpression>, Vec<Id<TType>>>,
 }
@@ -60,6 +86,11 @@ impl<'ctx> Typechecker<'ctx> {
             ctx,
             module: None,
             type_facts: None,
+            global_substitutions: None,
+
+            object_safe_traits: hashmap! {},
+            assoc_traits: hashmap! {},
+            method_traits: hashmap! {},
 
             infer_spans: hashmap! {},
             variables: hashmap! {},
@@ -69,7 +100,39 @@ impl<'ctx> Typechecker<'ctx> {
             epochs: vec![],
 
             solved: hashmap! {},
-            object_safe_traits: hashset! {},
+            function_generics: hashmap! {},
+            trait_generics: hashmap! {},
+        }
+    }
+
+    pub fn new_concrete(
+        parent: &Typechecker<'ctx>,
+        substitutions: BTreeMap<GenericId, Id<TType>>,
+    ) -> Self {
+        Typechecker {
+            ctx: parent.ctx,
+            module: None,
+            type_facts: Some(Arc::new(TFacts::empty())),
+            global_substitutions: Some(substitutions),
+
+            object_safe_traits: parent.object_safe_traits.clone(),
+            assoc_traits: parent.assoc_traits.clone(),
+            method_traits: parent.method_traits.clone(),
+
+            infer_spans: hashmap! {},
+            variables: hashmap! {},
+            return_tys: vec![],
+            loop_tys: hashmap! {},
+
+            epochs: vec![TEpoch {
+                goal: TGoal::Monomorphization,
+                infers: hashmap! {},
+                never_candidates: hashset! {},
+                ambiguity: None,
+                progress: false,
+            }],
+
+            solved: hashmap! {},
             function_generics: hashmap! {},
             trait_generics: hashmap! {},
         }
@@ -115,13 +178,13 @@ impl<'ctx> Typechecker<'ctx> {
         for (goal, (witness, span)) in self.solved.clone() {
             let goal = match goal {
                 TGoal::TheProgram => TGoal::TheProgram,
+                TGoal::Monomorphization => TGoal::Monomorphization,
                 TGoal::Implements(ty, trait_ty) => TGoal::Implements(
                     self.normalize_ty(ty, span)?,
                     self.normalize_trait_ty(trait_ty, span)?,
                 ),
                 TGoal::Method(e) => TGoal::Method(e),
-                TGoal::AssociatedType(m, ty, n) =>
-                    TGoal::AssociatedType(m, self.normalize_ty(ty, span)?, n),
+                TGoal::AssociatedType(t) => TGoal::AssociatedType(t),
             };
 
             let witness = match witness {
@@ -137,30 +200,37 @@ impl<'ctx> Typechecker<'ctx> {
                     self.normalize_ty(ty, span)?,
                     self.normalize_trait_ty(trait_ty, span)?,
                 ),
-                TImplWitness::Dynamic(ty, TTraitTypeWithBindings(trait_ty, bindings)) =>
+                TImplWitness::Dynamic(ty, trait_ty) => {
+                    let TTraitTypeWithBindings(trait_ty, bindings) = &*trait_ty.lookup(self.ctx);
+
                     TImplWitness::Dynamic(
                         self.normalize_ty(ty, span)?,
                         TTraitTypeWithBindings(
-                            self.normalize_trait_ty(trait_ty, span)?,
+                            self.normalize_trait_ty(*trait_ty, span)?,
                             bindings
-                                .into_iter()
-                                .map(|(n, ty)| AResult::Ok((n, self.normalize_ty(ty, span)?)))
+                                .iter()
+                                .map(|(n, ty)| AResult::Ok((*n, self.normalize_ty(*ty, span)?)))
                                 .try_collect_btreemap()?,
-                        ),
-                    ),
-                TImplWitness::DynamicCoersion(ty, TTraitTypeWithBindings(trait_ty, bindings)) =>
+                        )
+                        .intern(self.ctx),
+                    )
+                },
+                TImplWitness::DynamicCoersion(ty, trait_ty) => {
+                    let TTraitTypeWithBindings(trait_ty, bindings) = &*trait_ty.lookup(self.ctx);
                     TImplWitness::DynamicCoersion(
                         self.normalize_ty(ty, span)?,
                         TTraitTypeWithBindings(
-                            self.normalize_trait_ty(trait_ty, span)?,
+                            self.normalize_trait_ty(*trait_ty, span)?,
                             bindings
-                                .into_iter()
+                                .iter()
                                 .map(|(n, ty)| -> AResult<_> {
-                                    Ok((n, self.normalize_ty(ty, span)?))
+                                    Ok((*n, self.normalize_ty(*ty, span)?))
                                 })
                                 .try_collect_btreemap()?,
-                        ),
-                    ),
+                        )
+                        .intern(self.ctx),
+                    )
+                },
                 TImplWitness::Concrete => TImplWitness::Concrete,
             };
 
@@ -175,8 +245,27 @@ impl<'ctx> Typechecker<'ctx> {
 
             solved.insert(goal, (witness, span));
         }
-
         self.solved = solved;
+
+        let function_generics = self
+            .function_generics
+            .clone()
+            .into_iter()
+            .map(|(key, tys)| -> AResult<_> {
+                Ok((key, self.normalize_tys(&tys, key.lookup(self.ctx).span)?))
+            })
+            .try_collect_hashmap()?;
+        self.function_generics = function_generics;
+
+        let trait_generics = self
+            .trait_generics
+            .clone()
+            .into_iter()
+            .map(|(key, tys)| -> AResult<_> {
+                Ok((key, self.normalize_tys(&tys, key.lookup(self.ctx).span)?))
+            })
+            .try_collect_hashmap()?;
+        self.trait_generics = trait_generics;
 
         Ok(())
     }
@@ -184,7 +273,7 @@ impl<'ctx> Typechecker<'ctx> {
     fn in_epoch<T>(
         &mut self,
         goal: TGoal,
-        inner: impl Fn(&mut Self) -> AResult<T>,
+        inner: impl FnOnce(&mut Self) -> AResult<T>,
     ) -> AResult<(T, TEpoch)> {
         self.push_epoch(goal);
 
@@ -192,6 +281,23 @@ impl<'ctx> Typechecker<'ctx> {
         let epoch = self.pop_epoch();
 
         Ok((t?, epoch))
+    }
+
+    pub fn typecheck_loop_then_commit<T>(
+        &mut self,
+        goal: TGoal,
+        typechecking: impl Fn(&mut Self) -> AResult<()>,
+        result: impl FnOnce(&mut Self) -> AResult<T>,
+    ) -> AResult<T> {
+        self.push_epoch(goal);
+
+        self.typecheck_loop(typechecking)?;
+        let t = result(self);
+
+        let epoch = self.pop_epoch();
+        self.commit_epoch(epoch);
+
+        Ok(t?)
     }
 
     fn within_goal(&self, goal: &TGoal) -> bool {
@@ -223,6 +329,8 @@ impl<'ctx> Typechecker<'ctx> {
     }
 
     fn commit_epoch(&mut self, epoch: TEpoch) {
+        assert!(epoch.ambiguity.is_none());
+
         let last_epoch = self.epoch();
 
         last_epoch.infers.extend(epoch.infers);
@@ -239,7 +347,7 @@ impl<'ctx> Typechecker<'ctx> {
     }
 }
 
-struct TEpoch {
+pub struct TEpoch {
     goal: TGoal,
     infers: HashMap<InferId, Id<TType>>,
     never_candidates: HashSet<InferId>,
@@ -248,9 +356,10 @@ struct TEpoch {
 }
 
 #[derive(Debug, Copy, Clone, Hash, Eq, PartialEq, PrettyPrint)]
-enum TGoal {
+pub enum TGoal {
     TheProgram,
+    Monomorphization,
     Implements(Id<TType>, Id<TTraitType>),
     Method(Id<LExpression>),
-    AssociatedType(Id<LModule>, Id<TType>, Id<str>),
+    AssociatedType(Id<LType>),
 }

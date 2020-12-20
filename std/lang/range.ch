@@ -47,14 +47,6 @@ impl Iterator for RangeIterator {
     }
   }.
 
-  fn has_next(self) -> Bool = {
-    match self {
-      RangeIterator::Inclusive(a, b) => a <= b,
-      RangeIterator::Exclusive(a, b) => a < b,
-      RangeIterator::Infinite(_) => true,
-    }
-  }.
-
   fn size_hint(self) -> Int = {
     match self {
       RangeIterator::Inclusive(a, b) => b - a + 1,

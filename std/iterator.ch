@@ -16,7 +16,6 @@ trait Iterator {
   type Item.
 
   fn next(self) -> (Option<<Self as Iterator>::Item>, Self).
-  fn has_next(self) -> Bool.
   fn size_hint(self) -> Int.
 }
 
@@ -28,11 +27,12 @@ impl<It> Self for It where It: Iterator {
   fn map<F, O>(self, fun: F) -> Map<It, F> where F: Fn(<Self as Iterator>::Item) -> O = Map { fun, iterator: self }.
   fn enumerate(self) -> Enumerate<It> = Enumerate { idx: 0, iterator: self }.
   fn limit(self, limit: Int) -> Limit<It> = Limit { remaining: limit, iterator: self }.
-  fn zip<It2>(self, other: It2) -> Zip<It, It2> where It2: Iterator = Zip(self, other).
+  fn zip<It2>(self, other: It2) -> Zip<It, <It2 as Iterable>::Iterator> where It2: Iterable = Zip(self, other:iterator()).
+  fn flatten<OutIt>(self) -> Flatten<It, OutIt> where OutIt: Iterable = Flatten { iterator: self, sub_iterator: None }.
 
-  fn flat_map<F, OutIt>(self, fun: F) -> FlatMap<It, F, OutIt> where
+  fn flat_map<F, OutIt>(self, fun: F) -> Flatten<Map<It, F>, OutIt> where
       F: Fn(<Self as Iterator>::Item) -> OutIt, OutIt: Iterable
-    = FlatMap { iterator: self, fun, sub_iterator: None }.
+    = self:map(fun):flatten().
 
   fn collect<C>(self) -> C where C: FromIterator<<Self as Iterator>::Item> = {
     C::from_iterator(self)
@@ -49,10 +49,10 @@ impl<It> Self for It where It: Iterator {
 
 impl<T> Self for T where T: Iterator, <Self as Iterator>::Item: Default + Add<<Self as Iterator>::Item, Result=<Self as Iterator>::Item> {
   fn sum(self) -> <Self as Iterator>::Item =
-    Self::fold(
-      self,
-      <<Self as Iterator>::Item>::default(),
-      |a, b| a + b).
+    self:fold(
+      <_>::default(),
+      |a, b| a + b
+    ).
 }
 
 struct Map<It, F> {
@@ -71,11 +71,6 @@ impl<It, F, O> Iterator for Map<It, F> where
     let (next, iterator) = iterator:next().
 
     (next:map(fun), Map { iterator, fun })
-  }.
-
-  fn has_next(self) -> Bool = {
-    let Map { iterator, ... } = self.
-    iterator:has_next()
   }.
 
   fn size_hint(self) -> Int = {
@@ -101,11 +96,6 @@ impl<It> Iterator for Enumerate<It> where It: Iterator {
       Some(next) => (Some((idx, next)), Enumerate { iterator, idx: idx + 1 }),
       None => (None, Enumerate { iterator, idx })
     }
-  }.
-
-  fn has_next(self) -> Bool = {
-    let Enumerate { iterator, ... } = self.
-    iterator:has_next()
   }.
 
   fn size_hint(self) -> Int = {
@@ -134,16 +124,6 @@ impl<It> Iterator for Limit<It> where It: Iterator {
     }
   }.
 
-  fn has_next(self) -> Bool = {
-    let Limit { iterator, remaining } = self.
-
-    if remaining <= 0 {
-      false
-    } else {
-      iterator:has_next()
-    }
-  }.
-
   fn size_hint(self) -> Int = {
     let Limit { iterator, remaining } = self.
     let hint = iterator:size_hint().
@@ -164,19 +144,11 @@ impl<I1, I2> Iterator for Zip<I1, I2> where I1: Iterator, I2:Iterator {
   fn next(self) -> (Option<<Self as Iterator>::Item>, Self) = {
     let Zip(i1, i2) = self.
 
-    if i1:has_next() &? i2:has_next() {
-      let (n1, i1) = i1:next().
-      let (n2, i2) = i2:next().
-
-      (Some((n1:unwrap(), n2:unwrap())), Zip(i1, i2))
+    if let ((Some(n1), i1), (Some(n2), i2)) = (i1:next(), i2:next()) {
+      (Some((n1, n2)), Zip(i1, i2))
     } else {
       (None, self)
     }
-  }.
-
-  fn has_next(self) -> Bool = {
-    let Zip(i1, i2) = self.
-    i1:has_next() &? i2:has_next()
   }.
 
   fn size_hint(self) -> Int = {
@@ -190,47 +162,41 @@ impl<I1, I2> Iterator for Zip<I1, I2> where I1: Iterator, I2:Iterator {
   }.
 }
 
-struct FlatMap<It, F, OutIt> where OutIt: Iterable {
+struct Flatten<It, OutIt> where OutIt: Iterable {
   iterator: It,
-  fun: F,
   sub_iterator: Option<<OutIt as Iterable>::Iterator>,
 }
 
-impl<It, F, OutIt> Iterator for FlatMap<It, F, OutIt> where
-    F: Fn(<It as Iterator>::Item) -> OutIt, It: Iterator, OutIt: Iterable {
+impl<It, OutIt> Iterator for Flatten<It, OutIt> where It: Iterator<Item=OutIt>, OutIt: Iterable {
   type Item = <OutIt as Iterable>::Item.
 
   fn next(self) -> (Option<<Self as Iterator>::Item>, Self) = {
-    let FlatMap { iterator, fun, sub_iterator } = self.
+    let Flatten { iterator, sub_iterator } = self.
 
     if let Some(sub_iterator) = sub_iterator {
       if let (Some(sub_item), sub_iterator) = sub_iterator:next() {
-        return (Some(sub_item), FlatMap { iterator, fun, sub_iterator: Some(sub_iterator) }).
+        return (Some(sub_item), Flatten { iterator, sub_iterator: Some(sub_iterator) }).
       }
     }
 
     loop {
       if let (Some(item), new_iterator) = iterator:next() {
         iterator = new_iterator.
-        let sub_iterator = fun(item):iterator().
+        let sub_iterator = item:iterator().
 
         if let (Some(sub_item), sub_iterator) = sub_iterator:next() {
-          return (Some(sub_item), FlatMap { iterator, fun, sub_iterator: Some(sub_iterator) }).
+          return (Some(sub_item), Flatten { iterator, sub_iterator: Some(sub_iterator) }).
         }
       } else {
         break.
       }
     }
 
-    (None, FlatMap { iterator, fun, sub_iterator: None })
-  }.
-
-  fn has_next(self) -> Bool = {
-    todo()
+    (None, Flatten { iterator, sub_iterator: None })
   }.
 
   fn size_hint(self) -> Int = {
-    todo()
+    self:iterator:size_hint()
   }.
 }
 
@@ -260,12 +226,6 @@ impl<T> Iterator for ArrayIterator<T> {
     } else {
       (Some(array[idx]), ArrayIterator { array, idx: idx + 1 })
     }
-  }.
-
-  fn has_next(self) -> Bool = {
-    let ArrayIterator { array, idx } = self.
-
-    idx < array:len()
   }.
 
   fn size_hint(self) -> Int = {
@@ -326,12 +286,6 @@ impl Iterator for StringIterator {
     }
   }.
 
-  fn has_next(self) -> Bool = {
-    let StringIterator { str, idx } = self.
-
-    idx < str:len()
-  }.
-
   fn size_hint(self) -> Int = {
     let StringIterator { str, idx } = self.
 
@@ -369,10 +323,6 @@ impl<T> Iterator for OptionIterator<T> {
     (self:0, OptionIterator(None))
   }.
 
-  fn has_next(self) -> Bool = {
-    self:0:is_some()
-  }.
-
   fn size_hint(self) -> Int = {
     if self:0:is_some() {
       1
@@ -397,10 +347,6 @@ impl<T> Iterator for Repeat<T> {
     } else {
       (None, self)
     }
-  }.
-
-  fn has_next(self) -> Bool = {
-    self:1 > 0
   }.
 
   fn size_hint(self) -> Int = {

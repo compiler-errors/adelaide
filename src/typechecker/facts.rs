@@ -238,10 +238,11 @@ impl Typechecker<'_> {
                 // if we have `Ty: Iterable`, we should also assume that
                 // `<Ty as Iterable>::Iterator: Iterator`.
                 for restriction in restrictions {
-                    let TTraitTypeWithBindings(trait_ty, bindings) = self
+                    let TTraitTypeWithBindings(trait_ty, bindings) = &*self
                         .initialize_trait_ty_with_bindings(*restriction, &btreemap! {
                             tr_info.self_skolem.id => ty
-                        })?;
+                        })?
+                        .lookup(self.ctx);
 
                     debug!(
                         "Because of binding {:?}, we have to  assume that {:?} :- {:?}",
@@ -249,7 +250,13 @@ impl Typechecker<'_> {
                         Pretty(skolem_ty, self.ctx),
                         Pretty(trait_ty, self.ctx)
                     );
-                    self.assume_restriction(new_facts, skolem_ty, trait_ty, bindings, span)?;
+                    self.assume_restriction(
+                        new_facts,
+                        skolem_ty,
+                        *trait_ty,
+                        bindings.clone(),
+                        span,
+                    )?;
                 }
             }
         }
@@ -267,8 +274,9 @@ impl Typechecker<'_> {
         restrictions: Vec<TRestriction>,
         span: Span,
     ) -> AResult<()> {
-        for TRestriction(ty, TTraitTypeWithBindings(trait_ty, bindings)) in restrictions {
-            self.assume_restriction(new_facts, ty, trait_ty, bindings, span)?;
+        for TRestriction(ty, trait_ty) in restrictions {
+            let TTraitTypeWithBindings(trait_ty, bindings) = &*trait_ty.lookup(self.ctx);
+            self.assume_restriction(new_facts, ty, *trait_ty, bindings.clone(), span)?;
         }
 
         Ok(())

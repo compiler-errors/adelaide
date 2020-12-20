@@ -483,6 +483,23 @@ pub enum AError {
         #[span = "Required to be object-safe due to..."]
         use_span: Span,
     },
+
+    #[message = "Two `main` functions declared in this program, expected only one"]
+    ConflictingMain {
+        #[span]
+        span: Span,
+        #[span]
+        other_span: Span,
+    },
+
+    #[message = "Expected `main` to have signature `fn main() -> ()`"]
+    BadMainSignature {
+        #[span]
+        span: Span,
+    },
+
+    #[message = "No `main` function declared in this program, expected one"]
+    MissingMain,
 }
 
 pub trait IntoDiagnostic {

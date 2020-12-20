@@ -116,7 +116,7 @@ macro_rules! simple_pretty {
     }
 }
 
-simple_pretty!(std::fmt::Display; bool, u64, usize, char, str, &'static str, String);
+simple_pretty!(std::fmt::Display; bool, i64, u64, usize, char, str, &'static str, String);
 simple_pretty!(std::fmt::Debug; std::path::PathBuf);
 
 macro_rules! tuple_pretty {

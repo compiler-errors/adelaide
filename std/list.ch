@@ -244,11 +244,6 @@ impl<T> Iterator for ListIterator<T> {
     }
   }.
 
-  fn has_next(self) -> Bool = {
-    let ListIterator { link, ... } = self.
-    link:is_some()
-  }.
-
   fn size_hint(self) -> Int = {
     let ListIterator { size, ... } = self.
     size
