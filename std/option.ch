@@ -19,7 +19,7 @@ impl<T> Self for Option<T> {
   }.
 
   fn unwrap(self) -> T = {
-    self:expect("No value for \(type_string:<Self>())")
+    self:expect("No value for \(type_string_of:<Self>())")
   }.
 
   fn unwrap_or(self, other: T) -> T = {
@@ -90,7 +90,7 @@ impl<L, R> Self for Either<L, R> {
     }.
 
   fn unwrap_left(self) -> L =
-    self:expect_left("No Left value for \(type_string:<Self>())").
+    self:expect_left("No Left value for \(type_string_of:<Self>())").
 
   fn map_left<F, O>(self, f: F) -> Either<O, R> where F: Fn(L) -> O =
     match self {
@@ -111,7 +111,7 @@ impl<L, R> Self for Either<L, R> {
     }.
 
   fn unwrap_right(self) -> R =
-    self:expect_right("No Right value for \(type_string:<Self>())").
+    self:expect_right("No Right value for \(type_string_of:<Self>())").
 
   fn map_right<F, O>(self, f: F) -> Either<L, O> where F: Fn(R) -> O =
     match self {

@@ -3,7 +3,7 @@ impl<Ret> Call<()> for || -> Ret {
   type Return = Ret.
 
   fn call(self, args: ()) -> Ret = {
-    todo()
+    internal_call(self, args)
   }.
 }
 
@@ -11,7 +11,7 @@ impl<Ret> Call<()> for fn() -> Ret {
   type Return = Ret.
 
   fn call(self, args: ()) -> Ret = {
-    todo()
+    internal_call(self, args)
   }.
 }
 
@@ -26,6 +26,16 @@ impl Hash for () {
     let h = 7.
 
     h
+  }.
+}
+
+impl Equals<()> for () {
+  fn eq(self, other: Self) -> Bool = {
+    true
+  }.
+
+  fn ne(self, other: Self) -> Bool = {
+    !(self == other)
   }.
 }
 
@@ -62,7 +72,7 @@ impl<Ret, A> Call<(A,)> for |A| -> Ret {
   type Return = Ret.
 
   fn call(self, args: (A,)) -> Ret = {
-    todo()
+    internal_call(self, args)
   }.
 }
 
@@ -70,7 +80,7 @@ impl<Ret, A> Call<(A,)> for fn(A) -> Ret {
   type Return = Ret.
 
   fn call(self, args: (A,)) -> Ret = {
-    todo()
+    internal_call(self, args)
   }.
 }
 
@@ -85,6 +95,16 @@ impl<A> Hash for (A,) where A: Hash {
     let h = 7.
         h = 31 * h + self:0:hash().
     h
+  }.
+}
+
+impl<A> Equals<(A,)> for (A,) where A: Equals<A> {
+  fn eq(self, other: Self) -> Bool = {
+    self:0:eq(other:0)
+  }.
+
+  fn ne(self, other: Self) -> Bool = {
+    !(self == other)
   }.
 }
 
@@ -132,7 +152,7 @@ impl<Ret, A, B> Call<(A, B)> for |A, B| -> Ret {
   type Return = Ret.
 
   fn call(self, args: (A, B)) -> Ret = {
-    todo()
+    internal_call(self, args)
   }.
 }
 
@@ -140,7 +160,7 @@ impl<Ret, A, B> Call<(A, B)> for fn(A, B) -> Ret {
   type Return = Ret.
 
   fn call(self, args: (A, B)) -> Ret = {
-    todo()
+    internal_call(self, args)
   }.
 }
 
@@ -156,6 +176,16 @@ impl<A, B> Hash for (A, B) where A: Hash, B: Hash {
         h = 31 * h + self:0:hash().
         h = 31 * h + self:1:hash().
     h
+  }.
+}
+
+impl<A, B> Equals<(A, B)> for (A, B) where A: Equals<A>, B: Equals<B> {
+  fn eq(self, other: Self) -> Bool = {
+    self:0:eq(other:0) &? self:1:eq(other:1)
+  }.
+
+  fn ne(self, other: Self) -> Bool = {
+    !(self == other)
   }.
 }
 
@@ -215,7 +245,7 @@ impl<Ret, A, B, C> Call<(A, B, C)> for |A, B, C| -> Ret {
   type Return = Ret.
 
   fn call(self, args: (A, B, C)) -> Ret = {
-    todo()
+    internal_call(self, args)
   }.
 }
 
@@ -223,7 +253,7 @@ impl<Ret, A, B, C> Call<(A, B, C)> for fn(A, B, C) -> Ret {
   type Return = Ret.
 
   fn call(self, args: (A, B, C)) -> Ret = {
-    todo()
+    internal_call(self, args)
   }.
 }
 
@@ -240,6 +270,16 @@ impl<A, B, C> Hash for (A, B, C) where A: Hash, B: Hash, C: Hash {
         h = 31 * h + self:1:hash().
         h = 31 * h + self:2:hash().
     h
+  }.
+}
+
+impl<A, B, C> Equals<(A, B, C)> for (A, B, C) where A: Equals<A>, B: Equals<B>, C: Equals<C> {
+  fn eq(self, other: Self) -> Bool = {
+    self:0:eq(other:0) &? self:1:eq(other:1) &? self:2:eq(other:2)
+  }.
+
+  fn ne(self, other: Self) -> Bool = {
+    !(self == other)
   }.
 }
 
@@ -311,7 +351,7 @@ impl<Ret, A, B, C, D> Call<(A, B, C, D)> for |A, B, C, D| -> Ret {
   type Return = Ret.
 
   fn call(self, args: (A, B, C, D)) -> Ret = {
-    todo()
+    internal_call(self, args)
   }.
 }
 
@@ -319,7 +359,7 @@ impl<Ret, A, B, C, D> Call<(A, B, C, D)> for fn(A, B, C, D) -> Ret {
   type Return = Ret.
 
   fn call(self, args: (A, B, C, D)) -> Ret = {
-    todo()
+    internal_call(self, args)
   }.
 }
 
@@ -337,6 +377,16 @@ impl<A, B, C, D> Hash for (A, B, C, D) where A: Hash, B: Hash, C: Hash, D: Hash 
         h = 31 * h + self:2:hash().
         h = 31 * h + self:3:hash().
     h
+  }.
+}
+
+impl<A, B, C, D> Equals<(A, B, C, D)> for (A, B, C, D) where A: Equals<A>, B: Equals<B>, C: Equals<C>, D: Equals<D> {
+  fn eq(self, other: Self) -> Bool = {
+    self:0:eq(other:0) &? self:1:eq(other:1) &? self:2:eq(other:2) &? self:3:eq(other:3)
+  }.
+
+  fn ne(self, other: Self) -> Bool = {
+    !(self == other)
   }.
 }
 
@@ -420,7 +470,7 @@ impl<Ret, A, B, C, D, E> Call<(A, B, C, D, E)> for |A, B, C, D, E| -> Ret {
   type Return = Ret.
 
   fn call(self, args: (A, B, C, D, E)) -> Ret = {
-    todo()
+    internal_call(self, args)
   }.
 }
 
@@ -428,7 +478,7 @@ impl<Ret, A, B, C, D, E> Call<(A, B, C, D, E)> for fn(A, B, C, D, E) -> Ret {
   type Return = Ret.
 
   fn call(self, args: (A, B, C, D, E)) -> Ret = {
-    todo()
+    internal_call(self, args)
   }.
 }
 
@@ -447,6 +497,16 @@ impl<A, B, C, D, E> Hash for (A, B, C, D, E) where A: Hash, B: Hash, C: Hash, D:
         h = 31 * h + self:3:hash().
         h = 31 * h + self:4:hash().
     h
+  }.
+}
+
+impl<A, B, C, D, E> Equals<(A, B, C, D, E)> for (A, B, C, D, E) where A: Equals<A>, B: Equals<B>, C: Equals<C>, D: Equals<D>, E: Equals<E> {
+  fn eq(self, other: Self) -> Bool = {
+    self:0:eq(other:0) &? self:1:eq(other:1) &? self:2:eq(other:2) &? self:3:eq(other:3) &? self:4:eq(other:4)
+  }.
+
+  fn ne(self, other: Self) -> Bool = {
+    !(self == other)
   }.
 }
 
@@ -542,7 +602,7 @@ impl<Ret, A, B, C, D, E, F> Call<(A, B, C, D, E, F)> for |A, B, C, D, E, F| -> R
   type Return = Ret.
 
   fn call(self, args: (A, B, C, D, E, F)) -> Ret = {
-    todo()
+    internal_call(self, args)
   }.
 }
 
@@ -550,7 +610,7 @@ impl<Ret, A, B, C, D, E, F> Call<(A, B, C, D, E, F)> for fn(A, B, C, D, E, F) ->
   type Return = Ret.
 
   fn call(self, args: (A, B, C, D, E, F)) -> Ret = {
-    todo()
+    internal_call(self, args)
   }.
 }
 
@@ -570,6 +630,16 @@ impl<A, B, C, D, E, F> Hash for (A, B, C, D, E, F) where A: Hash, B: Hash, C: Ha
         h = 31 * h + self:4:hash().
         h = 31 * h + self:5:hash().
     h
+  }.
+}
+
+impl<A, B, C, D, E, F> Equals<(A, B, C, D, E, F)> for (A, B, C, D, E, F) where A: Equals<A>, B: Equals<B>, C: Equals<C>, D: Equals<D>, E: Equals<E>, F: Equals<F> {
+  fn eq(self, other: Self) -> Bool = {
+    self:0:eq(other:0) &? self:1:eq(other:1) &? self:2:eq(other:2) &? self:3:eq(other:3) &? self:4:eq(other:4) &? self:5:eq(other:5)
+  }.
+
+  fn ne(self, other: Self) -> Bool = {
+    !(self == other)
   }.
 }
 
@@ -677,7 +747,7 @@ impl<Ret, A, B, C, D, E, F, G> Call<(A, B, C, D, E, F, G)> for |A, B, C, D, E, F
   type Return = Ret.
 
   fn call(self, args: (A, B, C, D, E, F, G)) -> Ret = {
-    todo()
+    internal_call(self, args)
   }.
 }
 
@@ -685,7 +755,7 @@ impl<Ret, A, B, C, D, E, F, G> Call<(A, B, C, D, E, F, G)> for fn(A, B, C, D, E,
   type Return = Ret.
 
   fn call(self, args: (A, B, C, D, E, F, G)) -> Ret = {
-    todo()
+    internal_call(self, args)
   }.
 }
 
@@ -706,6 +776,16 @@ impl<A, B, C, D, E, F, G> Hash for (A, B, C, D, E, F, G) where A: Hash, B: Hash,
         h = 31 * h + self:5:hash().
         h = 31 * h + self:6:hash().
     h
+  }.
+}
+
+impl<A, B, C, D, E, F, G> Equals<(A, B, C, D, E, F, G)> for (A, B, C, D, E, F, G) where A: Equals<A>, B: Equals<B>, C: Equals<C>, D: Equals<D>, E: Equals<E>, F: Equals<F>, G: Equals<G> {
+  fn eq(self, other: Self) -> Bool = {
+    self:0:eq(other:0) &? self:1:eq(other:1) &? self:2:eq(other:2) &? self:3:eq(other:3) &? self:4:eq(other:4) &? self:5:eq(other:5) &? self:6:eq(other:6)
+  }.
+
+  fn ne(self, other: Self) -> Bool = {
+    !(self == other)
   }.
 }
 

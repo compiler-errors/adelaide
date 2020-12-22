@@ -1,6 +1,19 @@
+extern fn internal_thread_spawn<F, T>(trampoline: fn(F) -> T, call: F) -> ThreadHandle<T> where F: Fn() -> T.
+extern fn internal_thread_current() -> Thread.
+extern fn internal_thread_count() -> Int.
+extern fn internal_thread_yield().
+extern fn internal_thread_complete(t: Thread) -> Bool.
+
 object Thread {
   id: Int,
-  completed: Option<Dyn<Any>>,
+}
+
+object ThreadHandle<T> {
+  // We store this in a single tuple because we need 
+  // to make sure we can index the Option<T> return 
+  // value stably, which might vary depending on how 
+  // Id<str> hashes...
+  thread_and_return: (Thread, Option<T>),
 }
 
 fn call_trampoline<F, T>(f: F) -> T where F: Fn() -> T = {
@@ -8,36 +21,35 @@ fn call_trampoline<F, T>(f: F) -> T where F: Fn() -> T = {
 }.
 
 impl Self for Thread {
-  fn spawn<F, T>(f: F) -> Thread where F: Fn() -> T = {
-    let c = call_trampoline:<F, T>.
-    todo()
+  fn spawn<F, T>(f: F) -> ThreadHandle<T> where F: Fn() -> T = {
+    internal_thread_spawn(call_trampoline:<F, T>, f)
   }.
 
   // Returns the currently running thread.
   fn current() -> Thread = {
-    todo()
+    internal_thread_current()
   }.
 
-  // Wait for a thread to complete, return the value yielded by the thread.
-  fn join(self) -> Dyn<Any> = {
+  fn thread_count() -> Int = {
+    internal_thread_count()
+  }.
+
+  fn yield() = {
+    internal_thread_yield().
+  }.
+
+  fn is_complete(self) -> Bool = {
+    internal_thread_complete(self)
+  }.
+
+  fn join(self) = {
     if self:id == Thread::current():id {
       panic:<()>("Cannot Thread::join() on the running thread").
     }
 
-    loop {
-      if let Some(value) = self:completed {
-        break value.
-      } else {
-        todo() // yield
-      }
+    while self:is_complete() {
+      Thread::yield().
     }
-  }.
-
-  // Convenience function. Same as Thread::join, but explicitly downcast.
-  // Panics if the joined value isn't the specified concrete type.
-  fn join_as<T>(self) -> T = {
-    //self:join():downcast()
-    todo()
   }.
 
   // Waits until all threads are finished. This is only allowed to be executed
@@ -47,10 +59,24 @@ impl Self for Thread {
       panic:<()>("Can only call Thread::coalesce on the main thread").
     }
 
-    while (todo()) > 1 {
-      todo().
+    while Thread::thread_count() > 1 {
+      Thread::yield().
     }
   }.
+}
 
-  fn yield() = todo().
+impl<T> Self for ThreadHandle<T> {
+  fn join(self) -> T = {
+    if self:thread_and_return:0:id == Thread::current():id {
+      panic:<()>("Cannot Thread::join() on the running thread").
+    }
+
+    loop {
+      if let Some(value) = self:thread_and_return:1 {
+        break value.
+      } else {
+        Thread::yield().
+      }
+    }
+  }.
 }

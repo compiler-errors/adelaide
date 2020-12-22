@@ -8,7 +8,7 @@ impl<Ret{comma_generic_tys}> Call<{tuple_ty}> for {closure_type} {{
   type Return = Ret.
 
   fn call(self, args: {tuple_ty}) -> Ret = {{
-    todo()
+    internal_call(self, args)
   }}.
 }}
 
@@ -16,7 +16,7 @@ impl<Ret{comma_generic_tys}> Call<{tuple_ty}> for {fn_type} {{
   type Return = Ret.
 
   fn call(self, args: {tuple_ty}) -> Ret = {{
-    todo()
+    internal_call(self, args)
   }}.
 }}
 
@@ -30,6 +30,16 @@ impl{angled_generic_tys} Hash for {tuple_ty}{where_hash} {{
   fn hash(self) -> Int = {{
     let h = 7.{hashes}
     h
+  }}.
+}}
+
+impl{angled_generic_tys} Equals<{tuple_ty}> for {tuple_ty}{where_eq} {{
+  fn eq(self, other: Self) -> Bool = {{
+    {equals}
+  }}.
+
+  fn ne(self, other: Self) -> Bool = {{
+    !(self == other)
   }}.
 }}
 
@@ -91,6 +101,8 @@ for i in range(0,8):
 
     where_hash = "" if i == 0 else (" where " + ", ".join(g + ": Hash" for g in generics))
     hashes = "\n" + "\n".join(f"        h = 31 * h + self:{i}:hash()." for i in range(i))
+    where_eq = "" if i == 0 else (" where " + ", ".join(g + ": Equals<" + g + ">" for g in generics))
+    equals = "true" if i == 0 else " &? ".join(f"self:{i}:eq(other:{i})" for i in range(i))
 
     join_variant = "" if i == 0 else ("(" + ", ".join(["Either<P" + chr(ord('A') + j) + ", " + chr(ord('A') + j) + ">" for j in range(i)]) + ")")
     join_generics = "" if i == 0 else ("<" + ", ".join(generics + ["P" + chr(ord('A') + j) for j in range(i)]) + ">")
@@ -115,6 +127,8 @@ for i in range(0,8):
                         string_constructor=string_constructor,
                         where_hash=where_hash,
                         hashes=hashes,
+                        where_eq=where_eq,
+                        equals=equals,
                         join_generics=join_generics,
                         where_poll=where_poll,
                         join_variant=join_variant,

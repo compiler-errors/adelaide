@@ -46,7 +46,7 @@ impl<T> Self for Vector<T> {
       self:size = self:size - 1.
       let elem = self:array[self:size].
 
-      self:array[self:size] = todo().
+      self:array[self:size] = internal_undefined_value().
 
       //self:try_downsize().
       Some(elem)

@@ -16,6 +16,12 @@ pub type AResult<T> = std::result::Result<T, AError>;
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Diagnostic, PrettyPrint)]
 pub enum AError {
+    #[message = "This should never happen"]
+    Oof {
+        #[span]
+        span: Span,
+    },
+
     #[message = "IO Error while reading {child_path}"]
     #[note = "{io_error}"]
     IOErrorInArgumentPath {

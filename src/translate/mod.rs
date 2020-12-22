@@ -11,11 +11,11 @@ use crate::{
     lexer::Span,
     lowering::{LFunction, LGlobal, LImpl, LModule, LTrait, LTypeData},
     typechecker::{typecheck_program, TGoal, TImplWitness, TTraitType, TType, Typechecker},
-    util::{AError, AResult, Id, TryCollectVec, ZipExact},
+    util::{AError, AResult, Id, Pretty, TryCollectVec, ZipExact},
 };
 
-use self::{
-    expr::{CExpression, CStackId},
+pub use self::{
+    expr::{CExpression, CLiteral, CStackId, CStatement},
     pattern::CPattern,
     ty::CType,
 };
@@ -30,7 +30,7 @@ pub fn translate_program(ctx: &dyn AdelaideContext) -> AResult<()> {
     Ok(())
 }
 
-struct Translator<'ctx, 'a> {
+pub struct Translator<'ctx, 'a> {
     ctx: &'ctx dyn AdelaideContext,
     typechecker: Typechecker<'ctx>,
     alloc: &'a Bump,
@@ -39,6 +39,9 @@ struct Translator<'ctx, 'a> {
     tys: HashMap<Id<TType>, CType<'a>>,
     functions: HashMap<CFunctionId<'a>, Option<CFunction<'a>>>,
     globals: HashMap<Id<LGlobal>, Option<CGlobal<'a>>>,
+
+    type_strings: HashMap<CType<'a>, &'a str>,
+    type_ids: HashMap<CType<'a>, usize>,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -50,8 +53,11 @@ pub enum CFunctionId<'a> {
 }
 
 pub struct CProgram<'a> {
-    functions: HashMap<CFunctionId<'a>, CFunction<'a>>,
-    globals: HashMap<Id<LGlobal>, CGlobal<'a>>,
+    pub main: CFunctionId<'a>,
+    pub functions: HashMap<CFunctionId<'a>, CFunction<'a>>,
+    pub globals: HashMap<Id<LGlobal>, CGlobal<'a>>,
+    pub type_strings: HashMap<CType<'a>, &'a str>,
+    pub type_ids: HashMap<CType<'a>, usize>,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -66,20 +72,21 @@ pub enum CFunction<'a> {
     // Dispatch to a function in the vtable slot at the given index
     Dispatch(usize),
     // Dispatch to an extern function
-    Extern,
+    Extern(&'a str, &'a [CType<'a>]),
 }
 
 #[derive(Debug, Copy, Clone)]
 pub struct CGlobal<'a> {
-    slots: usize,
-    body: CExpression<'a>,
+    pub name: &'a str,
+    pub slots: usize,
+    pub body: CExpression<'a>,
 }
 
 #[derive(Debug, Copy, Clone)]
-pub struct CVTable<'a>(&'a [CFunctionId<'a>]);
+pub struct CVTable<'a>(pub &'a [CFunctionId<'a>]);
 
 impl<'ctx, 'a> Translator<'ctx, 'a> {
-    fn new(
+    pub fn new(
         ctx: &'ctx dyn AdelaideContext,
         typechecker: Typechecker<'ctx>,
         alloc: &'a Bump,
@@ -93,16 +100,20 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             tys: hashmap! {},
             functions: hashmap! {},
             globals: hashmap! {},
+
+            type_strings: hashmap! {},
+            type_ids: hashmap! {},
         }
     }
 
-    fn translate_program(mut self) -> AResult<CProgram<'a>> {
+    pub fn translate_program(mut self) -> AResult<&'a CProgram<'a>> {
         let main = self
             .find_main(self.ctx.lower_program()?)?
             .ok_or(AError::MissingMain)?;
         self.translate_function(main, &[])?;
 
-        Ok(CProgram {
+        Ok(self.alloc.alloc_with(|| CProgram {
+            main: CFunctionId::Function(main, &[]),
             functions: self
                 .functions
                 .into_iter()
@@ -113,7 +124,9 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                 .into_iter()
                 .map(|(id, g)| (id, g.unwrap()))
                 .collect(),
-        })
+            type_strings: self.type_strings,
+            type_ids: self.type_ids,
+        }))
     }
 
     fn find_main(&self, m: Id<LModule>) -> AResult<Option<Id<LFunction>>> {
@@ -162,6 +175,11 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
 
     fn translate_global(&mut self, id: Id<LGlobal>) -> AResult<()> {
         if !self.globals.contains_key(&id) {
+            debug!(
+                "Translating global {:?}",
+                Pretty(id.lookup(self.ctx).name, self.ctx)
+            );
+
             self.globals.insert(id, None);
 
             let info = id.lookup(self.ctx);
@@ -180,6 +198,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                 |tyck| tyck.typecheck_global(id),
                 |tyck| {
                     Ok(CGlobal {
+                        name: self.deintern_string(info.name),
                         slots: slots.len(),
                         body: self.translate_expr(info.expr, tyck, &slots)?,
                     })
@@ -235,7 +254,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                             body: self.translate_expr(body, tyck, &slots)?,
                         })
                     } else {
-                        Ok(CFunction::Extern)
+                        Ok(CFunction::Extern(self.deintern_string(info.name), generics))
                     }
                 },
             )?;

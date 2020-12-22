@@ -5,13 +5,18 @@ use vector::*.
 use list::*.
 use hash_map::*.
 use threading::*.
+use timer::*.
+
+// PLEASE don't call this lmfao
+extern fn internal_undefined_value<T>() -> T.
 
 extern fn gc().
 extern fn print(s: String).
 extern fn unreachable<T>() -> T.
-extern fn type_string<T>() -> String.
 extern fn exit(i: Int).
 extern fn breakpoint().
+extern fn type_id_of<T>() -> Int where T: Concrete.
+extern fn type_string_of<T>() -> String where T: Concrete.
 
 fn println(s: String) = {
   print(s + "\n").
@@ -37,8 +42,4 @@ fn panic<T>(s: String) -> T = {
 
   exit(-1).
   unreachable()
-}.
-
-fn type_string_of<T>(t: T) -> String = {
-  type_string:<T>()
 }.

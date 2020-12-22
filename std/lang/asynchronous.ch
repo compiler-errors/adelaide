@@ -1,3 +1,20 @@
+extern fn internal_poll_park().
+extern fn internal_poll_unpark<T>(awaitable: Awaitable<T>) -> (PollState<T>, Awaitable<T>).
+
+// Poll a value, then return it 
+fn internal_poll_trampoline<P>(poll: P) -> <P as Poll>::Result where P: Poll = {
+    loop {
+        match poll:poll() {
+          (PollState::Complete(value), _) => 
+            break value,
+          (PollState::Incomplete, new_poll) => {
+            poll = new_poll.
+            internal_poll_park().
+          },
+        }
+    }
+}.
+
 object Awaitable<T>.
 
 trait Poll {
@@ -15,11 +32,7 @@ impl<T> Poll for Awaitable<T> {
     type Result = T.
 
      fn poll(self) -> (PollState<T>, Self) = {
-        let (poll_state, new_self) = todo().
-
-        // NOTE: self is a heap object (heap awaitable), so
-        // we can just return it by reference.
-        (poll_state, new_self)
+        internal_poll_unpark(self)
      }.
 }
 
@@ -35,14 +48,12 @@ impl<T> Wait for T where T: Poll {
             let (state, new_pollable) = pollable:poll().
 
             match state {
-                PollState::Complete(value) => return value,
+                PollState::Complete(value) => break value,
                 PollState::Incomplete => {},
             }
 
             pollable = new_pollable.
         }
-
-        unreachable()
     }.
 }
 

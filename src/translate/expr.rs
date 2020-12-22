@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
+    lexer::Span,
     lowering::{
         LExpression, LExpressionData, LGlobal, LLiteral, LMembers, LStatement, LStatementData,
         LVariableContext, LoopId, VariableId,
@@ -31,14 +32,14 @@ pub enum CExpression<'a> {
     Global(Id<LGlobal>),
     GlobalFunction(CFunctionId<'a>),
     Call(CFunctionId<'a>, &'a [CExpression<'a>]),
-    Structure(&'a [(usize, CExpression<'a>)]),
-    Allocation(&'a [(usize, CExpression<'a>)]),
-    Variant(Id<str>, &'a [(usize, CExpression<'a>)]),
-    Access(&'a CExpression<'a>, usize),
+    Struct(&'a [(usize, CExpression<'a>)]),
+    Object(&'a [(usize, CExpression<'a>)]),
+    Variant(&'a str, &'a [(usize, CExpression<'a>)]),
+    StructAccess(&'a CExpression<'a>, usize),
+    ObjectAccess(&'a CExpression<'a>, usize),
     Assign(&'a CExpression<'a>, &'a CExpression<'a>),
     Or(&'a CExpression<'a>, &'a CExpression<'a>),
     And(&'a CExpression<'a>, &'a CExpression<'a>),
-    PollTrampoline(&'a CExpression<'a>),
     Return(&'a CExpression<'a>),
     Break(LoopId, &'a CExpression<'a>),
     Continue(LoopId),
@@ -103,20 +104,42 @@ impl<'a> Translator<'_, 'a> {
                 CExpression::GlobalFunction(self.translate_function(fun.get(self.ctx), generics)?)
             },
             LExpressionData::Access(expr, _, member, _) => {
-                let idx =
-                    if let TType::Object(obj, _) = &*tyck.satisfy_expr(*expr)?.lookup(self.ctx) {
-                        if let LMembers::Named(_, _, members) = &obj.lookup(self.ctx).members {
-                            members[member].0
-                        } else {
-                            unreachable!()
+                let sub_expr = self.translate_sub_expr(*expr, tyck, slots)?;
+
+                match &*tyck.satisfy_expr(*expr)?.lookup(self.ctx) {
+                    TType::Object(obj, _) => {
+                        let obj_info = obj.lookup(self.ctx);
+                        match &obj_info.members {
+                            LMembers::Named(_, _, members) => {
+                                let idx = members[member].0;
+                                // We separate these two access types because it makes it easier to
+                                // determine lvals
+                                if obj_info.is_structural {
+                                    CExpression::StructAccess(sub_expr, idx)
+                                } else {
+                                    CExpression::ObjectAccess(sub_expr, idx)
+                                }
+                            },
+                            _ => unreachable!(),
                         }
-                    } else {
-                        unreachable!()
-                    };
-                CExpression::Access(self.translate_sub_expr(*expr, tyck, slots)?, idx)
+                    },
+                    _ => unreachable!(),
+                }
             },
-            LExpressionData::IndexAccess(expr, _, idx, _) =>
-                CExpression::Access(self.translate_sub_expr(*expr, tyck, slots)?, *idx),
+            LExpressionData::IndexAccess(expr, _, idx, _) => {
+                let sub_expr = self.translate_sub_expr(*expr, tyck, slots)?;
+
+                match &*tyck.satisfy_expr(*expr)?.lookup(self.ctx) {
+                    TType::Object(obj, _) =>
+                        if obj.lookup(self.ctx).is_structural {
+                            CExpression::StructAccess(sub_expr, *idx)
+                        } else {
+                            CExpression::ObjectAccess(sub_expr, *idx)
+                        },
+                    TType::Tuple(_) => CExpression::StructAccess(sub_expr, *idx),
+                    _ => unreachable!(),
+                }
+            },
             LExpressionData::Tuple(exprs) => {
                 let members = exprs
                     .iter()
@@ -125,7 +148,7 @@ impl<'a> Translator<'_, 'a> {
                         Ok((idx, self.translate_expr(*expr, tyck, slots)?))
                     })
                     .try_collect_vec()?;
-                CExpression::Structure(self.alloc.alloc_slice_copy(&members))
+                CExpression::Struct(self.alloc.alloc_slice_copy(&members))
             },
             LExpressionData::StructConstructor(_, _, exprs) => {
                 let members = exprs
@@ -134,7 +157,7 @@ impl<'a> Translator<'_, 'a> {
                         Ok((*idx, self.translate_expr(*expr, tyck, slots)?))
                     })
                     .try_collect_vec()?;
-                CExpression::Structure(self.alloc.alloc_slice_copy(&members))
+                CExpression::Struct(self.alloc.alloc_slice_copy(&members))
             },
             LExpressionData::ArrayLiteral(exprs, _) => {
                 let members = exprs
@@ -144,16 +167,16 @@ impl<'a> Translator<'_, 'a> {
                         Ok((idx, self.translate_expr(*expr, tyck, slots)?))
                     })
                     .try_collect_vec()?;
-                CExpression::Allocation(self.alloc.alloc_slice_copy(&members))
+                CExpression::Object(self.alloc.alloc_slice_copy(&members))
             },
-            LExpressionData::ObjectAllocation(_, _, exprs) => {
+            LExpressionData::AllocateObject(_, _, exprs) => {
                 let members = exprs
                     .iter()
                     .map(|(idx, expr)| -> AResult<_> {
                         Ok((*idx, self.translate_expr(*expr, tyck, slots)?))
                     })
                     .try_collect_vec()?;
-                CExpression::Allocation(self.alloc.alloc_slice_copy(&members))
+                CExpression::Object(self.alloc.alloc_slice_copy(&members))
             },
             LExpressionData::EnumConstructor(_, _, discriminant, exprs) => {
                 let members = exprs
@@ -162,12 +185,17 @@ impl<'a> Translator<'_, 'a> {
                         Ok((*idx, self.translate_expr(*expr, tyck, slots)?))
                     })
                     .try_collect_vec()?;
-                CExpression::Variant(*discriminant, self.alloc.alloc_slice_copy(&members))
+                CExpression::Variant(
+                    self.deintern_string(*discriminant),
+                    self.alloc.alloc_slice_copy(&members),
+                )
             },
-            LExpressionData::Assign(left, right) => CExpression::Assign(
-                self.translate_sub_expr(*left, tyck, slots)?,
-                self.translate_sub_expr(*right, tyck, slots)?,
-            ),
+            LExpressionData::Assign(left, right) => {
+                let left = self.translate_sub_expr(*left, tyck, slots)?;
+                self.check_lval(*left)?;
+
+                CExpression::Assign(left, self.translate_sub_expr(*right, tyck, slots)?)
+            },
             LExpressionData::Or(left, right) => CExpression::Or(
                 self.translate_sub_expr(*left, tyck, slots)?,
                 self.translate_sub_expr(*right, tyck, slots)?,
@@ -176,8 +204,6 @@ impl<'a> Translator<'_, 'a> {
                 self.translate_sub_expr(*left, tyck, slots)?,
                 self.translate_sub_expr(*right, tyck, slots)?,
             ),
-            LExpressionData::PollTrampoline(expr, _) =>
-                CExpression::PollTrampoline(self.translate_sub_expr(*expr, tyck, slots)?),
             LExpressionData::Return(expr) =>
                 CExpression::Return(self.translate_sub_expr(*expr, tyck, slots)?),
             LExpressionData::Break(id, expr) =>
@@ -366,5 +392,15 @@ impl<'a> Translator<'_, 'a> {
             .map(|stmt| self.translate_stmt(*stmt, tyck, slots))
             .try_collect_vec()?;
         Ok(self.alloc.alloc_slice_copy(&stmts))
+    }
+
+    pub fn check_lval(&self, expr: CExpression<'a>) -> AResult<()> {
+        match expr {
+            CExpression::Variable(_)
+            | CExpression::GlobalFunction(_)
+            | CExpression::ObjectAccess(..) => Ok(()),
+            CExpression::StructAccess(left, _) => self.check_lval(*left),
+            _ => todo!("Die: Not an lval"),
+        }
     }
 }

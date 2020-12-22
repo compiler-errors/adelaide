@@ -55,3 +55,13 @@ impl Iterator for RangeIterator {
     }
   }.
 }
+
+impl Into<String> for RangeIterator {
+  fn into(self) -> String = {
+    match self {
+      RangeIterator::Inclusive(a, b) => "\(a)..=\(b)",
+      RangeIterator::Exclusive(a, b) => "\(a)..\(b)",
+      RangeIterator::Infinite(a) => "\(a)...",
+    }
+  }.
+}

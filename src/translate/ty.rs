@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use crate::{
-    lowering::{LEnum, LObject, LTrait, LType},
+    lowering::{fresh_id, LEnum, LObject, LTrait, LType},
     typechecker::{TTraitType, TTraitTypeWithBindings, TType, Typechecker},
     util::{AResult, Id, Intern, Pretty, TryCollectVec, ZipExact},
 };
@@ -110,6 +110,12 @@ impl<'a> Translator<'_, 'a> {
         };
 
         self.tys.insert(ty, cty);
+        self.type_strings.insert(
+            cty,
+            self.alloc.alloc_str(&format!("{:?}", Pretty(ty, self.ctx))),
+        );
+        self.type_ids.insert(cty, fresh_id());
+
         Ok(cty)
     }
 

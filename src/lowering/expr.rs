@@ -46,12 +46,11 @@ pub enum LExpressionData {
     Call(LId<LFunction>, Vec<Id<LType>>, Vec<Id<LExpression>>),
     Or(Id<LExpression>, Id<LExpression>),
     And(Id<LExpression>, Id<LExpression>),
-    PollTrampoline(Id<LExpression>, Id<LType>),
     Return(Id<LExpression>),
     Break(LoopId, Id<LExpression>),
     Continue(LoopId),
     StructConstructor(LId<LObject>, Vec<Id<LType>>, Vec<(usize, Id<LExpression>)>),
-    ObjectAllocation(LId<LObject>, Vec<Id<LType>>, Vec<(usize, Id<LExpression>)>),
+    AllocateObject(LId<LObject>, Vec<Id<LType>>, Vec<(usize, Id<LExpression>)>),
     EnumConstructor(
         LId<LEnum>,
         Vec<Id<LType>>,
@@ -717,7 +716,7 @@ impl LoweringContext<'_> {
                     let s = self.ctx.object_constructor(o)?;
                     let a = self.lower_constructor("object", info.name, &s, a)?;
 
-                    LExpressionData::ObjectAllocation(o.into(), g, a)
+                    LExpressionData::AllocateObject(o.into(), g, a)
                 },
                 i => {
                     let (kind, name, def_span) = i.info(self.ctx);
@@ -814,26 +813,20 @@ impl LoweringContext<'_> {
                 }
 
                 let a = self.lower_expr(*a)?;
-                let poll_call = LExpression {
-                    source: e,
-                    span: *span,
-                    data: self.std_static_call(
-                        true,
-                        self.fresh_infer_ty(*span),
-                        "Poll",
-                        vec![],
-                        "poll",
-                        vec![],
-                        vec![a],
-                        *span,
-                    ),
-                }
-                .intern(self.ctx);
 
-                // Lower `e:await` into `poll_trampoline(<_ as Poll>::poll(e))`
-                // poll_trampoline will do the work of actually unwinding the
-                // thread on an incomplete.
-                LExpressionData::PollTrampoline(poll_call, self.fresh_infer_ty(*span))
+                // Lower `e:await` into `poll_trampoline(p)`, which will do all of the heavy
+                // work of unwinding the stack when our awaitable is incomplete
+                if let LScopeItem::Function(trampoline_call) =
+                    self.ctx.std_item("internal_poll_trampoline")
+                {
+                    LExpressionData::Call(
+                        trampoline_call.into(),
+                        vec![self.fresh_infer_ty(*span)],
+                        vec![a],
+                    )
+                } else {
+                    unreachable!()
+                }
             },
         };
 

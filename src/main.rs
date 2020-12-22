@@ -20,6 +20,7 @@ extern crate self as adelaide;
 
 mod ctx;
 mod file;
+mod interpret;
 mod lexer;
 mod lowering;
 mod parser;
@@ -33,10 +34,10 @@ use codespan_reporting::term::termcolor::{ColorChoice, StandardStream};
 
 use ctx::{AdelaideContext, AdelaideDatabase};
 use file::initialize_from_path_arguments;
+use interpret::interpret_program;
 use util::{AError, AResult, IntoDiagnostic, Pretty};
 
 #[derive(Clap)]
-#[clap()]
 struct Cmd {
     mode: Mode,
     input: Vec<String>,
@@ -52,6 +53,7 @@ enum Mode {
     Lower,
     Typecheck,
     Translate,
+    Interpret,
 }
 
 impl std::str::FromStr for Mode {
@@ -65,6 +67,7 @@ impl std::str::FromStr for Mode {
             "lower" | "c" => Ok(Mode::Lower),
             "typecheck" | "t" => Ok(Mode::Typecheck),
             "translate" | "m" => Ok(Mode::Translate),
+            "interpret" | "i" => Ok(Mode::Interpret),
             m => Err(format!("Invalid compiler mode `{}`", m)),
         }
     }
@@ -74,7 +77,9 @@ fn main() {
     let mut ctx = AdelaideDatabase::default();
 
     std::process::exit(match try_main(&mut ctx) {
-        Err(AError::BrokenPipe) | Ok(()) => 0,
+        Ok(()) |
+        // Broken pipes are an "ok" error -- this can happen if we pipe the output into less, or head/tail, etc. This should not cause a panic on the program side.
+        Err(AError::BrokenPipe) => 0,
         Err(err) => {
             let writer = StandardStream::stderr(ColorChoice::Always);
             let config = codespan_reporting::term::Config::default();
@@ -125,6 +130,10 @@ fn try_main(ctx: &mut AdelaideDatabase) -> AResult<()> {
         Mode::Translate => {
             ctx.translate_program()?;
             stdoutln!("Translated!")?;
+        },
+        Mode::Interpret => {
+            // We don't want this to go thru salsa.
+            interpret_program(ctx)?;
         },
     }
 

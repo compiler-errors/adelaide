@@ -142,29 +142,6 @@ impl Typechecker<'_> {
                     right.lookup(self.ctx).span,
                 )?
             },
-            LExpressionData::PollTrampoline(expr, unwrapped_ty) => {
-                let span = expr.lookup(self.ctx).span;
-                let expr_ty = self.satisfy_expr(*expr)?;
-                let unwrapped_ty = self.satisfy_ty(*unwrapped_ty)?;
-
-                if let TType::Tuple(tys) = &*expr_ty.lookup(self.ctx) {
-                    if let TType::Enum(_, gs) = &*tys[0].lookup(self.ctx) {
-                        self.unify_ty(UnifyMode::Normal, gs[0], span, unwrapped_ty, span)?
-                    } else {
-                        self.set_ambiguity(AError::AmbiguousType {
-                            ty: unwrapped_ty,
-                            use_span: span,
-                        });
-                        unwrapped_ty
-                    }
-                } else {
-                    self.set_ambiguity(AError::AmbiguousType {
-                        ty: unwrapped_ty,
-                        use_span: span,
-                    });
-                    unwrapped_ty
-                }
-            },
             LExpressionData::Return(expr) => {
                 let (return_ty, return_span) = self.return_tys.last().cloned().unwrap();
 
@@ -254,7 +231,7 @@ impl Typechecker<'_> {
                 )?
             },
             LExpressionData::StructConstructor(o, gs, members)
-            | LExpressionData::ObjectAllocation(o, gs, members) => {
+            | LExpressionData::AllocateObject(o, gs, members) => {
                 let generic_tys = self.satisfy_tys(&gs)?;
 
                 let (object_ty, expected_tys, restrictions) =

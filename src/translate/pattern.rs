@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
+    lexer::Span,
     lowering::{LPattern, LPatternData, VariableId},
     typechecker::Typechecker,
     util::{AResult, Id, TryCollectVec},
@@ -17,7 +18,7 @@ pub enum CPattern<'a> {
     Literal(CLiteral<'a>),
     Variable(CStackId),
     Destructure(&'a [CPattern<'a>]),
-    DestructureEnum(Id<str>, &'a [CPattern<'a>]),
+    DestructureEnum(&'a str, &'a [CPattern<'a>]),
 }
 
 impl<'a> Translator<'_, 'a> {
@@ -27,7 +28,9 @@ impl<'a> Translator<'_, 'a> {
         tyck: &mut Typechecker,
         slots: &HashMap<VariableId, CStackId>,
     ) -> AResult<CPattern<'a>> {
-        let pattern = match &pattern.lookup(self.ctx).data {
+        let info = pattern.lookup(self.ctx);
+
+        let pattern = match &info.data {
             LPatternData::Underscore(_) => CPattern::Underscore,
             LPatternData::Literal(l) => CPattern::Literal(self.translate_literal(*l)),
             LPatternData::Variable(v) => {
@@ -36,8 +39,10 @@ impl<'a> Translator<'_, 'a> {
             },
             LPatternData::Tuple(ps) | LPatternData::StructPattern(_, _, ps) =>
                 CPattern::Destructure(self.translate_sub_patterns(&ps, tyck, slots)?),
-            LPatternData::EnumVariantPattern(_, _, v, ps) =>
-                CPattern::DestructureEnum(*v, self.translate_sub_patterns(&ps, tyck, slots)?),
+            LPatternData::EnumVariantPattern(_, _, v, ps) => CPattern::DestructureEnum(
+                self.deintern_string(*v),
+                self.translate_sub_patterns(&ps, tyck, slots)?,
+            ),
         };
 
         Ok(pattern)

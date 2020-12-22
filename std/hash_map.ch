@@ -1,6 +1,3 @@
-let default_bucket_size: Int = 8.
-let threshold: Float = 0.75.
-
 object HashMap<K, V> {
   size: Int,
 
@@ -13,8 +10,8 @@ impl<K, V> Self for HashMap<K, V> {
     allocate HashMap {
       size: 0,
 
-      buckets: allocate [Bucket; default_bucket_size],
-      num_buckets: default_bucket_size
+      buckets: allocate [Bucket; 8 /* default_bucket_size */],
+      num_buckets: 8 /* default_bucket_size */
     }
   }.
 
@@ -98,7 +95,7 @@ impl<K, V> Self for HashMap<K, V> where K: Equals<K> + Hash {
   }.
 
   fn try_grow(self) = {
-    if (self:size:to:<Float>()) > (self:num_buckets:to:<Float>()) * threshold {
+    if (self:size:to:<Float>()) > (self:num_buckets:to:<Float>()) * 0.75 /* threshold */ {
       let old_buckets = self:buckets.
       self:num_buckets = self:num_buckets * 2.
       self:buckets = allocate [Bucket; self:num_buckets].
