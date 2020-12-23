@@ -179,16 +179,12 @@ impl<It, OutIt> Iterator for Flatten<It, OutIt> where It: Iterator<Item=OutIt>, 
       }
     }
 
-    loop {
-      if let (Some(item), new_iterator) = iterator:next() {
-        iterator = new_iterator.
-        let sub_iterator = item:iterator().
+    while let (Some(item), new_iterator) = iterator:next() {
+      iterator = new_iterator.
+      let sub_iterator = item:iterator().
 
-        if let (Some(sub_item), sub_iterator) = sub_iterator:next() {
-          return (Some(sub_item), Flatten { iterator, sub_iterator: Some(sub_iterator) }).
-        }
-      } else {
-        break.
+      if let (Some(sub_item), sub_iterator) = sub_iterator:next() {
+        return (Some(sub_item), Flatten { iterator, sub_iterator: Some(sub_iterator) }).
       }
     }
 

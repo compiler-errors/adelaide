@@ -683,6 +683,13 @@ pub enum PExpressionData {
         Id<PExpression>,
         Id<PExpression>,
     ),
+    WhileLet(
+        Option<Id<str>>,
+        Id<PPattern>,
+        Id<PExpression>,
+        Id<PExpression>,
+        Id<PExpression>,
+    ),
     For(
         Option<Id<str>>,
         Id<PPattern>,
@@ -887,6 +894,20 @@ impl PExpression {
         PExpression {
             span,
             data: PExpressionData::While(label, c, t, e),
+        }
+    }
+
+    pub fn while_let_loop(
+        span: Span,
+        label: Option<Id<str>>,
+        p: Id<PPattern>,
+        c: Id<PExpression>,
+        t: Id<PExpression>,
+        e: Id<PExpression>,
+    ) -> PExpression {
+        PExpression {
+            span,
+            data: PExpressionData::WhileLet(label, p, c, t, e),
         }
     }
 

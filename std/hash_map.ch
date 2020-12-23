@@ -38,25 +38,19 @@ impl<K, V> Self for HashMap<K, V> where K: Equals<K> + Hash {
     let bucket = self:bucket_from_hash(hash).
 
     let next_link = bucket:entries:root.
-    loop {
-      match next_link {
-        Some(link) => {
-          let (old_hash, old_key, old_value) = link:get().
 
-          if hash == old_hash {
-            if key == old_key {
-              link:unlink().
-              self:size = self:size - 1.
-              return Some(old_value).
-            }
-          }
+    while let Some(link) = next_link {
+      let (old_hash, old_key, old_value) = link:get().
 
-          next_link = link:next.
-        },
-        None => {
-          break.
-        },
+      if hash == old_hash {
+        if key == old_key {
+          link:unlink().
+          self:size = self:size - 1.
+          return Some(old_value).
+        }
       }
+
+      next_link = link:next.
     }
 
     None
@@ -67,24 +61,18 @@ impl<K, V> Self for HashMap<K, V> where K: Equals<K> + Hash {
     let bucket = self:bucket_from_hash(hash).
 
     let next_link = bucket:entries:root.
-    loop {
-      match next_link {
-        Some(link) => {
-          let (old_hash, old_key, old_value) = link:get().
 
-          if hash == old_hash {
-            if key == old_key {
-              link:set((hash, key, value)).
-              return Some(old_value).
-            }
-          }
+    while let Some(link) = next_link {
+      let (old_hash, old_key, old_value) = link:get().
 
-          next_link = link:next.
-        },
-        None => {
-          break.
-        },
+      if hash == old_hash {
+        if key == old_key {
+          link:set((hash, key, value)).
+          return Some(old_value).
+        }
       }
+
+      next_link = link:next.
     }
 
     self:size = self:size + 1.
@@ -165,18 +153,14 @@ impl<K, V> Iterator for HashMapIterator<K, V> {
     let ArrayIterator { idx: buckets_idx, ... } = buckets.
 
     // TODO: while let
-    loop {
-      if let (Some(next_bucket), next_buckets) = buckets:next() {
-        buckets = next_buckets. // We can't overwrite in a destructure.
+    while let (Some(next_bucket), next_buckets) = buckets:next() {
+      buckets = next_buckets. // We can't overwrite in a destructure.
 
-        if next_bucket:entries:len() > 0 {
-          let (next_link, links) = next_bucket:entries:iterator():next().
-          let (_, k, v) = next_link:unwrap().
+      if next_bucket:entries:len() > 0 {
+        let (next_link, links) = next_bucket:entries:iterator():next().
+        let (_, k, v) = next_link:unwrap().
 
-          return (Some((k, v)), HashMapIterator { size_hint: size_hint - 1, buckets, links }).
-        }
-      } else {
-        break.
+        return (Some((k, v)), HashMapIterator { size_hint: size_hint - 1, buckets, links }).
       }
     }
 

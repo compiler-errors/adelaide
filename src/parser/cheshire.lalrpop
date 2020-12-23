@@ -615,6 +615,8 @@ UndottableExpression: Id<PExpression> = {
         PExpression::plain_loop(Span(file, l, h), a, b).intern(ctx),
     <l:@L> <a:MaybeLabel> "while" <c:PreblockExpression> <b:Block> <e:MaybeElseBlock> <h:@R> =>
         PExpression::while_loop(Span(file, l, h), a, c, b, e).intern(ctx),
+    <l:@L> <a:MaybeLabel> "while" "let" <p:Pattern> "=" <c:PreblockExpression> <b:Block> <e:MaybeElseBlock> <h:@R> =>
+    PExpression::while_let_loop(Span(file, l, h), a, p, c, b, e).intern(ctx),
     <l:@L> <a:MaybeLabel> "for" <p:Pattern> "in" <c:PreblockExpression> <b:Block> <e:MaybeElseBlock> <h:@R> =>
         PExpression::for_loop(Span(file, l, h), a, p, c, b, e).intern(ctx),
     <l:@L> "match" <c:PreblockExpression> <h:@R> "{" <b:CommaTrailingOrEmpty<MatchBranch>> "}" =>

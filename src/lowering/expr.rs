@@ -574,16 +574,6 @@ impl LoweringContext<'_> {
                     self.fresh_infer_ty(*span),
                 )
             },
-            PExpressionData::If(p, t, e) => LExpressionData::If(
-                self.lower_expr(*p)?,
-                self.lower_expr(*t)?,
-                self.lower_expr(*e)?,
-            ),
-            PExpressionData::IfLet(p, v, t, e) =>
-                LExpressionData::Match(self.lower_expr(*v)?, vec![
-                    (self.lower_pattern(*p)?, self.lower_expr(*t)?),
-                    (self.fresh_empty_pattern(*span), self.lower_expr(*e)?),
-                ]),
             PExpressionData::Loop(l, e) => {
                 let l = self.enter_label(*l);
                 let e = self.lower_expr(*e)?;
@@ -600,8 +590,17 @@ impl LoweringContext<'_> {
 
                 LExpressionData::Loop(l, e, ty)
             },
+            PExpressionData::If(p, t, e) => LExpressionData::If(
+                self.lower_expr(*p)?,
+                self.lower_expr(*t)?,
+                self.lower_expr(*e)?,
+            ),
+            PExpressionData::IfLet(p, v, t, els) =>
+                self.lower_if_let(e, *span, *p, *v, *t, *els)?,
             PExpressionData::While(l, p, t, els) =>
                 self.lower_expr_while(e, *span, *l, *p, *t, *els)?,
+            PExpressionData::WhileLet(l, p, v, t, els) =>
+                self.lower_expr_while_let(e, *span, *l, *p, *v, *t, *els)?,
             PExpressionData::For(l, p, es, t, els) =>
                 self.lower_expr_for(e, *span, *l, *p, *es, *t, *els)?,
             PExpressionData::Match(e, ps) => {
@@ -914,6 +913,30 @@ impl LoweringContext<'_> {
         Ok(ret)
     }
 
+    fn lower_if_let(
+        &mut self,
+        source: Id<PExpression>,
+        span: Span,
+        pattern: Id<PPattern>,
+        value: Id<PExpression>,
+        then_expr: Id<PExpression>,
+        else_expr: Id<PExpression>,
+    ) -> AResult<LExpressionData> {
+        let value = self.lower_expr(value)?;
+
+        self.enter_block();
+        let then_pattern = self.lower_pattern(pattern)?;
+        let then_expr = self.lower_expr(then_expr)?;
+        self.exit_block();
+
+        let else_expr = self.lower_expr(else_expr)?;
+
+        Ok(LExpressionData::Match(value, vec![
+            (then_pattern, then_expr),
+            (self.fresh_empty_pattern(span), else_expr),
+        ]))
+    }
+
     fn lower_expr_while(
         &mut self,
         source: Id<PExpression>,
@@ -941,6 +964,46 @@ impl LoweringContext<'_> {
                 source,
                 span,
                 data: LExpressionData::If(condition, then_expr, else_expr),
+            }
+            .intern(self.ctx),
+            self.fresh_infer_ty(span),
+        ))
+    }
+
+    fn lower_expr_while_let(
+        &mut self,
+        source: Id<PExpression>,
+        span: Span,
+        label: Option<Id<str>>,
+        pattern: Id<PPattern>,
+        condition: Id<PExpression>,
+        then_expr: Id<PExpression>,
+        else_expr: Id<PExpression>,
+    ) -> AResult<LExpressionData> {
+        let condition = self.lower_expr(condition)?;
+
+        let label = self.enter_label(label);
+        self.enter_block();
+        let then_pattern = self.lower_pattern(pattern)?;
+        let then_expr = self.lower_expr(then_expr)?;
+        self.exit_block();
+
+        let else_expr = LExpression {
+            source,
+            span,
+            data: LExpressionData::Break(label, self.lower_expr(else_expr)?),
+        }
+        .intern(self.ctx);
+
+        Ok(LExpressionData::Loop(
+            label,
+            LExpression {
+                source,
+                span,
+                data: LExpressionData::Match(condition, vec![
+                    (then_pattern, then_expr),
+                    (self.fresh_empty_pattern(span), else_expr),
+                ]),
             }
             .intern(self.ctx),
             self.fresh_infer_ty(span),
