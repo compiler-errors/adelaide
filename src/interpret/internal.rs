@@ -6,7 +6,7 @@ use lazy_static::lazy_static;
 use crate::translate::CType;
 
 use super::{
-    heap::{Awaitable, Heap, Value},
+    heap::{Generator, Heap, Value},
     thread::{Control, State, Thread, ThreadId},
     IError, IResult, Interpreter,
 };
@@ -185,10 +185,10 @@ lazy_static! {
         map.insert("internal_thread_count", thread_count);
         map.insert("internal_thread_current", thread_current);
         map.insert("internal_thread_spawn", thread_spawn);
-        map.insert("internal_thread_yield", thread_yield);
+        map.insert("internal_thread_switch", thread_switch);
+        map.insert("internal_thread_block_on", thread_block_on);
 
-        map.insert("internal_poll_park", poll_park);
-        map.insert("internal_poll_unpark", poll_unpark);
+        map.insert("internal_generator_unpark", generator_unpark);
 
         map.insert("internal_unbox_transmute", unbox_transmute);
         map.insert(
@@ -308,7 +308,7 @@ fn array_deref<'a>(
 
 fn array_len<'a>(
     _: &Interpreter<'a>,
-    heap: &mut Heap<'a>,
+    _: &mut Heap<'a>,
     _: &mut Thread<'a>,
     _: &'a [CType<'a>],
     args: Vec<Value<'a>>,
@@ -327,7 +327,7 @@ fn array_slice<'a>(
     _: &'a [CType<'a>],
     args: Vec<Value<'a>>,
 ) -> IResult<State<'a>> {
-    if let (Value::Object(obj, start, len), Value::Int(a), Value::Int(b)) = unwrap_args(args) {
+    if let (Value::Object(obj, start, _), Value::Int(a), Value::Int(b)) = unwrap_args(args) {
         Ok(State::Value(Value::Object(
             obj,
             start + a as usize,
@@ -420,7 +420,7 @@ fn thread_count<'a>(
     )))
 }
 
-fn thread_yield<'a>(
+fn thread_switch<'a>(
     _: &Interpreter<'a>,
     heap: &mut Heap<'a>,
     thread: &mut Thread<'a>,
@@ -443,29 +443,31 @@ fn thread_yield<'a>(
             unreachable!()
         }
     } else {
-        // Do nothing, no thread to which to yield
+        // Do nothing, no thread to which to switch
         Ok(State::Value(Value::unit()))
     }
 }
 
-fn poll_unpark<'a>(
+fn thread_block_on<'a>(
     _: &Interpreter<'a>,
     heap: &mut Heap<'a>,
     thread: &mut Thread<'a>,
     _: &'a [CType<'a>],
     args: Vec<Value<'a>>,
 ) -> IResult<State<'a>> {
-    debug!("Unparking the awaitable");
+    if let (Value::Int(id),) = unwrap_args(args) {
+        if !heap.block_on_thread(thread, ThreadId(id as usize)) {
+            return Ok(State::Value(Value::unit()));
+        }
 
-    let (awaitable,) = unwrap_args(args);
-
-    match heap.store_awaitable_evaluating(awaitable.clone()) {
-        Awaitable::Incomplete {
-            stack_rev,
-            slots_rev,
-        } => {
-            thread.control.extend(stack_rev.into_iter().rev());
-            thread.slots.extend(slots_rev.into_iter().rev());
+        if let Some(new_thread) = heap.pop_ready_thread() {
+            let mut old_thread = std::mem::replace(thread, new_thread);
+            // Park the unit value state onto the top of the old thread, since that's what
+            // this function is expected to return.
+            old_thread
+                .control
+                .push(Control::Parked(State::Value(Value::unit())));
+            heap.push_blocked_thread(old_thread);
 
             // Unpark the state from the current thread
             if let Some(Control::Parked(state)) = thread.control.pop() {
@@ -473,54 +475,42 @@ fn poll_unpark<'a>(
             } else {
                 unreachable!()
             }
-        },
-        Awaitable::Complete(val) => {
-            heap.store_awaitable_complete(awaitable.clone(), val.clone());
-            Ok(State::Value(Value::Struct(vec![
-                Value::Variant("Complete", vec![val]),
-                awaitable,
-            ])))
-        },
-        Awaitable::Evaluating => Err(IError::DoubleAwait),
+        } else {
+            Err(IError::Deadlock)
+        }
+    } else {
+        unreachable!()
     }
 }
 
-fn poll_park<'a>(
+fn generator_unpark<'a>(
     _: &Interpreter<'a>,
     heap: &mut Heap<'a>,
     thread: &mut Thread<'a>,
     _: &'a [CType<'a>],
-    _: Vec<Value<'a>>,
+    args: Vec<Value<'a>>,
 ) -> IResult<State<'a>> {
-    debug!("Parking the awaitable");
+    debug!("Unparking the generator");
 
-    let mut slots_rev = vec![];
-    // Park the unit value state onto the top of the old thread, since that's what
-    // this function is expected to return.
-    let mut stack_rev = vec![Control::Parked(State::Value(Value::unit()))];
+    let (generator, value) = unwrap_args(args);
 
-    loop {
-        match thread.control.pop() {
-            None => unreachable!(),
-            Some(Control::Scope) => {
-                slots_rev.push(thread.slots.pop().unwrap());
-                stack_rev.push(Control::Scope);
-            },
-            Some(Control::AsyncScope(awaitable)) => {
-                slots_rev.push(thread.slots.pop().unwrap());
-                stack_rev.push(Control::AsyncScope(awaitable.clone()));
+    match heap.store_generator_evaluating(generator.clone()) {
+        Generator::Incomplete { stack_rev, slots } => {
+            thread.control.extend(stack_rev.into_iter().rev());
+            thread.slots.push(slots);
 
-                heap.store_awaitable_incomplete(awaitable.clone(), stack_rev, slots_rev);
+            Ok(State::Value(value))
+        },
+        Generator::Complete(value) => {
+            heap.store_generator_complete(generator.clone(), value.clone());
 
-                return Ok(State::Value(Value::Struct(vec![
-                    Value::Variant("Incomplete", vec![]),
-                    awaitable,
-                ])));
-            },
-            Some(control) => {
-                stack_rev.push(control);
-            },
-        }
+            //Err(IError::AfterComplete)
+            Ok(State::Value(Value::Struct(vec![
+                Value::Variant("Complete", vec![value]),
+                generator,
+            ])))
+        },
+        Generator::Evaluating => Err(IError::DoubleResume),
     }
 }
 

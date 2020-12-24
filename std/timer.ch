@@ -4,7 +4,7 @@ fn wait_millis(millis: Int) = {
     let end = now_millis() + millis.
 
     while now_millis() < end {
-        Thread::yield().
+        Thread::switch().
     }
 }.
 

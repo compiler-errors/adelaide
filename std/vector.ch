@@ -121,7 +121,7 @@ impl<T> Deref<Int> for Vector<T> {
 
   fn deref(self, idx: Int) -> T = {
     if idx < 0 | idx >= self:len() {
-      panic:<()>("Index \(idx) out of bounds. Size is \(self:len())::").
+      panic("Index \(idx) out of bounds. Size is \(self:len())::").
     }
 
     self:array[idx]
@@ -131,7 +131,7 @@ impl<T> Deref<Int> for Vector<T> {
 impl<T> DerefAssign<Int> for Vector<T> {
   fn deref_assign(self, idx: Int, value: T) -> T = {
     if idx < 0 | idx >= self:len() {
-      panic:<()>("Index \(idx) out of bounds. Size is \(self:len())::").
+      panic("Index \(idx) out of bounds. Size is \(self:len())::").
     }
 
     self:array[idx] = value.

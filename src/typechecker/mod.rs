@@ -68,6 +68,8 @@ pub struct Typechecker<'ctx> {
     variables: HashMap<VariableId, Id<TType>>,
     /// Return types which are used for typechecking, known to exist
     return_tys: Vec<(Id<TType>, Span)>,
+    /// Yield types which are used for typechecking, known to exist
+    yield_tys: Vec<(Id<TType>, Id<TType>, Span)>,
     /// Loop "return" types which are used for typechecking, known to exist
     loop_tys: HashMap<LoopId, (Id<TType>, Span)>,
 
@@ -95,6 +97,7 @@ impl<'ctx> Typechecker<'ctx> {
             infer_spans: hashmap! {},
             variables: hashmap! {},
             return_tys: vec![],
+            yield_tys: vec![],
             loop_tys: hashmap! {},
 
             epochs: vec![],
@@ -122,6 +125,7 @@ impl<'ctx> Typechecker<'ctx> {
             infer_spans: hashmap! {},
             variables: hashmap! {},
             return_tys: vec![],
+            yield_tys: vec![],
             loop_tys: hashmap! {},
 
             epochs: vec![TEpoch {

@@ -664,6 +664,9 @@ impl<'input> Lexer<'input> {
 
             "async" => Token::Async,
             "await" => Token::Await,
+            "gen" => Token::Gen,
+            "yield" => Token::Yield,
+            "yields" => Token::Yields,
 
             "Int" => Token::Int,
             "Float" => Token::Float,

@@ -441,7 +441,7 @@ pub enum PTypeData {
 
     Dynamic(Id<PTraitTypeWithBindings>),
 
-    Awaitable(Id<PType>),
+    AsyncBlock(Id<PType>),
 }
 
 impl PType {
@@ -560,7 +560,7 @@ impl PType {
     pub fn awaitable(span: Span, t: Id<PType>) -> PType {
         PType {
             span,
-            data: PTypeData::Awaitable(t),
+            data: PTypeData::AsyncBlock(t),
         }
     }
 }
@@ -649,6 +649,12 @@ pub enum PExpressionData {
     Identifiers(Vec<(Span, Id<str>)>, Vec<Id<PType>>),
     Block(Vec<Id<PStatement>>, Id<PExpression>),
     AsyncBlock(Id<PExpression>),
+    GeneratorBlock(
+        Option<(Span, Id<str>, Id<PType>)>,
+        Id<PType>,
+        Id<PType>,
+        Id<PExpression>,
+    ),
     Tuple(Vec<Id<PExpression>>),
     ArrayLiteral(Vec<Id<PExpression>>),
     Array(Id<PType>, Id<PExpression>),
@@ -707,6 +713,7 @@ pub enum PExpressionData {
     ),
     Allocate(Vec<(Span, Id<str>)>, Vec<Id<PType>>, PConstructorArguments),
     Return(Id<PExpression>),
+    Yield(Id<PExpression>),
     Assert(Id<PExpression>),
     Break(Option<Id<PExpression>>, Option<(Span, Id<str>)>),
     Continue(Option<(Span, Id<str>)>),
@@ -741,6 +748,19 @@ impl PExpression {
         PExpression {
             span,
             data: PExpressionData::AsyncBlock(expression),
+        }
+    }
+
+    pub fn generator_block(
+        span: Span,
+        in_param: Option<(Span, Id<str>, Id<PType>)>,
+        return_ty: Id<PType>,
+        yield_ty: Id<PType>,
+        expr: Id<PExpression>,
+    ) -> PExpression {
+        PExpression {
+            span,
+            data: PExpressionData::GeneratorBlock(in_param, return_ty, yield_ty, expr),
         }
     }
 
@@ -1012,6 +1032,13 @@ impl PExpression {
         PExpression {
             span,
             data: PExpressionData::Return(data),
+        }
+    }
+
+    pub fn yield_statement(span: Span, data: Id<PExpression>) -> PExpression {
+        PExpression {
+            span,
+            data: PExpressionData::Yield(data),
         }
     }
 

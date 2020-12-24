@@ -86,6 +86,9 @@ extern {
         "instruction" => Token::Instruction,
         "async" => Token::Async,
         "await" => Token::Await,
+        "gen" => Token::Gen,
+        "yield" => Token::Yield,
+        "yields" => Token::Yields,
 
         "Int" => Token::Int,
         "Float" => Token::Float,
@@ -497,6 +500,7 @@ Expression0<Kind>: Id<PExpression> = {
 Expression1<Kind> = {
     <UndottableExpression>,
     <AsyncBlockExpression>,
+    <GeneratorBlockExpression>,
     <ClosureExpression<Kind>>,
     <ControlFlowExpression<Kind>>,
     <LBinOp<Prec1, Expression2<Kind>>>,
@@ -530,6 +534,21 @@ AsyncBlockExpression: Id<PExpression> = {
         PExpression::async_block(Span(file, l, h), b).intern(ctx),
 };
 
+GeneratorBlockExpression: Id<PExpression> = {
+    <l:@L> "gen" <p:MaybeDeclParam> <r:MaybeReturn> <y:MaybeYields> <b:Block> <h:@R> =>
+        PExpression::generator_block(Span(file, l, h), p, r, y, b).intern(ctx),
+};
+
+MaybeDeclParam: Option<(Span, Id<str>, Id<PType>)> = {
+    "(" <DeclParam> ")" => Some(<>),
+    () => None,
+};
+
+MaybeYields: Id<PType> = {
+    "yields" <Type>,
+    <l:@L> () <h:@R> => PType::infer(Span(file, l, h)).intern(ctx),
+};
+
 ClosureExpression<Kind>: Id<PExpression> = {
     <l:@L> "|" <p:CommaTrailingOrEmpty<Pattern>> "|" "->" <r:Type> <b:Block> <h:@R> =>
         PExpression::closure(Span(file, l, h), p, r, b).intern(ctx),
@@ -546,6 +565,10 @@ ControlFlowExpression<Kind>: Id<PExpression> = {
         PExpression::return_statement(Span(file, l, h), PExpression::unit(Span(file, el, h)).intern(ctx)).intern(ctx),
     <l:@L> "return" <e:Expression2<Kind>> <h:@R> =>
         PExpression::return_statement(Span(file, l, h), e).intern(ctx),
+    <l:@L> "yield" <e:Expression2<Kind>> <h:@R> =>
+        PExpression::yield_statement(Span(file, l, h), e).intern(ctx),
+    <l:@L> "yield" <el:@L> <h:@R> =>
+        PExpression::yield_statement(Span(file, l, h), PExpression::unit(Span(file, el, h)).intern(ctx)).intern(ctx),
     <l:@L> "break" <e:Expression2<Kind>?> <el:@L> <h:@R> =>
         PExpression::break_stmt(Span(file, l, h), e, None).intern(ctx),
     <l:@L> "break" <e:Expression2<Kind>?> "at" <il:@L> <i:Identifier> <h:@R> =>

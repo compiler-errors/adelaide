@@ -4,7 +4,7 @@ use crate::{
     lowering::{
         LExpression, LExpressionData, LLiteral, LPattern, LPatternData, LStatement, LStatementData,
     },
-    util::{AError, AResult, Id, Intern, Pretty, TryCollectVec, ZipExact},
+    util::{AResult, Id, Intern, Pretty, TryCollectVec, ZipExact},
 };
 
 use super::{
@@ -35,17 +35,27 @@ impl Typechecker<'_> {
 
                 self.satisfy_expr(*expr)?
             },
-            LExpressionData::AsyncBlock(vcx, expr, return_ty) => {
+            LExpressionData::Generator(vcx, parameter, return_ty, yield_ty, expr) => {
                 self.satisfy_vcx(vcx)?;
+
+                // In type is either the param ty
+                let in_ty = parameter
+                    .map(|p| self.satisfy_ty(p.ty))
+                    .transpose()?
+                    .unwrap_or_else(|| TType::Tuple(vec![]).intern(self.ctx));
 
                 let return_span = return_ty.lookup(self.ctx).span;
                 let return_ty = self.satisfy_ty(*return_ty)?;
+                let yield_span = yield_ty.lookup(self.ctx).span;
+                let yield_ty = self.satisfy_ty(*yield_ty)?;
 
                 self.return_tys.push((return_ty, return_span));
+                self.yield_tys.push((in_ty, yield_ty, yield_span));
                 let expr_ty = self.satisfy_expr(*expr)?;
                 self.return_tys.pop();
+                self.yield_tys.pop();
 
-                let ty = self.unify_ty(
+                let return_ty = self.unify_ty(
                     UnifyMode::Normal,
                     return_ty,
                     return_span,
@@ -53,7 +63,10 @@ impl Typechecker<'_> {
                     expr.lookup(self.ctx).span,
                 )?;
 
-                TType::Object(self.ctx.lower_awaitable_item()?, vec![ty]).intern(self.ctx)
+                TType::Object(self.ctx.lower_generator_item()?, vec![
+                    in_ty, yield_ty, return_ty,
+                ])
+                .intern(self.ctx)
             },
             LExpressionData::Global(g) => self.satisfy_ty(g.lookup(self.ctx).ty)?,
             LExpressionData::GlobalFunction(f, gs) => {
@@ -155,6 +168,20 @@ impl Typechecker<'_> {
                 )?;
 
                 self.ctx.static_ty(&TType::Never)
+            },
+            LExpressionData::Yield(expr) => {
+                let (in_ty, yield_ty, yield_span) = self.yield_tys.last().cloned().unwrap();
+
+                let expr_ty = self.satisfy_expr(*expr)?;
+                let _ = self.unify_ty(
+                    UnifyMode::Normal,
+                    yield_ty,
+                    yield_span,
+                    expr_ty,
+                    expr.lookup(self.ctx).span,
+                )?;
+
+                in_ty
             },
             LExpressionData::Loop(id, expr, loop_ty) => {
                 let loop_span = loop_ty.lookup(self.ctx).span;

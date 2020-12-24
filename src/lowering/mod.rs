@@ -221,9 +221,8 @@ impl<'ctx> LoweringContext<'ctx> {
     /// Enter a top-level item scope. If `return_allowed` is false, then we will
     /// fail if we try to lower the "return" operator. If `await_allowed` is
     /// unset, then we will fail if we try to lower the `:await` operator.
-    fn enter_context(&mut self, return_allowed: bool, await_allowed: bool) {
-        self.scopes
-            .push(FunctionScope::new(return_allowed, await_allowed));
+    fn enter_context(&mut self, kind: ScopeKind) {
+        self.scopes.push(FunctionScope::new(kind));
         self.enter_block();
     }
 
@@ -342,12 +341,23 @@ impl<'ctx> LoweringContext<'ctx> {
 }
 
 struct FunctionScope {
-    return_allowed: bool,
-    await_allowed: bool,
+    kind: ScopeKind,
     variable_scopes: Vec<HashMap<Id<str>, LVariable>>,
     label_scopes: Vec<(Id<str>, LoopId, bool)>,
     generics: HashMap<Id<str>, LGeneric>,
     vcx: LVariableContext,
+}
+#[derive(Copy, Clone)]
+enum ScopeKind {
+    /// `return`/`:await`/`` all disallowed
+    None,
+    /// `return` allowed
+    Returnable,
+    /// `return` and `:await` allowed
+    Async,
+    /// `return` and `yield` allowed
+    Generator,
+    // AsyncGenerator,
 }
 
 #[derive(Debug, Hash, Eq, PartialEq, PrettyPrint)]
@@ -357,10 +367,9 @@ pub struct LVariableContext {
 }
 
 impl FunctionScope {
-    fn new(return_allowed: bool, await_allowed: bool) -> Self {
+    fn new(kind: ScopeKind) -> Self {
         FunctionScope {
-            return_allowed,
-            await_allowed,
+            kind,
             variable_scopes: vec![],
             label_scopes: vec![],
             generics: hashmap! {},
@@ -935,10 +944,10 @@ pub fn lower_pollstate_item(ctx: &dyn AdelaideContext) -> AResult<Id<LEnum>> {
     }
 }
 
-pub fn lower_awaitable_item(ctx: &dyn AdelaideContext) -> AResult<Id<LObject>> {
+pub fn lower_generator_item(ctx: &dyn AdelaideContext) -> AResult<Id<LObject>> {
     if let LScopeItem::Object(e) = ctx
         .mod_items(ctx.parse_std()?)?
-        .get(&ctx.static_name("Awaitable"))
+        .get(&ctx.static_name("Generator"))
         .unwrap()
     {
         let lowered_e: LId<LObject> = (*e).into();

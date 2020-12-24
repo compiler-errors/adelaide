@@ -5,9 +5,8 @@ use std::{
 };
 
 use crate::{
-    lexer::Span,
     lowering::LoopId,
-    translate::{CExpression, CFunction, CPattern, CStatement},
+    translate::{CExpression, CFunction, CPattern, CStackId, CStatement},
 };
 
 use super::heap::Value;
@@ -52,7 +51,8 @@ pub enum State<'a> {
 pub enum Control<'a> {
     Parked(State<'a>),
     Scope,
-    AsyncScope(Value<'a>),
+    GeneratorScope(Value<'a>),
+    FirstResume(Option<CStackId>, CExpression<'a>),
     Block(&'a [CStatement<'a>], CExpression<'a>),
     Invoke(CFunction<'a>, &'a [CExpression<'a>], Vec<Value<'a>>),
     /// Allocate a structure.
@@ -78,6 +78,7 @@ pub enum Control<'a> {
     And(CExpression<'a>),
     If(CExpression<'a>, CExpression<'a>),
     Return,
+    Yield,
     Break(LoopId),
     Loop(LoopId, CExpression<'a>),
     Match(&'a [(CPattern<'a>, CExpression<'a>)]),

@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use crate::{
-    lexer::Span,
     lowering::{
         LExpression, LExpressionData, LGlobal, LLiteral, LMembers, LStatement, LStatementData,
         LVariableContext, LoopId, VariableId,
@@ -28,7 +27,7 @@ pub enum CExpression<'a> {
     Literal(CLiteral<'a>),
     Variable(CStackId),
     Block(&'a [CStatement<'a>], &'a CExpression<'a>),
-    AsyncBlock(usize, CCaptures<'a>, &'a CExpression<'a>),
+    Generator(usize, CCaptures<'a>, Option<CStackId>, &'a CExpression<'a>),
     Global(Id<LGlobal>),
     GlobalFunction(CFunctionId<'a>),
     Call(CFunctionId<'a>, &'a [CExpression<'a>]),
@@ -41,6 +40,7 @@ pub enum CExpression<'a> {
     Or(&'a CExpression<'a>, &'a CExpression<'a>),
     And(&'a CExpression<'a>, &'a CExpression<'a>),
     Return(&'a CExpression<'a>),
+    Yield(&'a CExpression<'a>),
     Break(LoopId, &'a CExpression<'a>),
     Continue(LoopId),
     Closure(CCaptures<'a>, &'a CFunction<'a>),
@@ -86,11 +86,14 @@ impl<'a> Translator<'_, 'a> {
                 self.translate_sub_stmts(statements, tyck, slots)?,
                 self.translate_sub_expr(*expr, tyck, slots)?,
             ),
-            LExpressionData::AsyncBlock(vcx, expr, _) => {
+            LExpressionData::Generator(vcx, param, _, _, expr) => {
                 let (slots, captures) = self.translate_captures(vcx, slots);
-                CExpression::AsyncBlock(
+                let in_slot = param.map(|v| slots[&v.id]);
+
+                CExpression::Generator(
                     slots.len(),
                     captures,
+                    in_slot,
                     self.translate_sub_expr(*expr, tyck, &slots)?,
                 )
             },
@@ -206,6 +209,8 @@ impl<'a> Translator<'_, 'a> {
             ),
             LExpressionData::Return(expr) =>
                 CExpression::Return(self.translate_sub_expr(*expr, tyck, slots)?),
+            LExpressionData::Yield(expr) =>
+                CExpression::Yield(self.translate_sub_expr(*expr, tyck, slots)?),
             LExpressionData::Break(id, expr) =>
                 CExpression::Break(*id, self.translate_sub_expr(*expr, tyck, slots)?),
             LExpressionData::Continue(id) => CExpression::Continue(*id),

@@ -66,8 +66,8 @@ impl LoweringContext<'_> {
                 } else {
                     return Err(AError::IllegalInfer { span: *span });
                 },
-            PTypeData::Awaitable(a) => {
-                if let LScopeItem::Object(awaitable) = self.ctx.std_item("Awaitable") {
+            PTypeData::AsyncBlock(a) => {
+                if let LScopeItem::Object(awaitable) = self.ctx.std_item("AsyncBlock") {
                     LTypeData::Object(awaitable.into(), vec![self.lower_ty(
                         *a,
                         infer_allowed,

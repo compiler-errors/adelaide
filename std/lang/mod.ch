@@ -1,9 +1,9 @@
 use any::*.
 use access::*.
 use arithmetic::*.
-use asynchronous::*.
 use builtin::*.
 use call::*.
+use generator::*.
 use misc::*.
 use predicate::*.
 use range::*.

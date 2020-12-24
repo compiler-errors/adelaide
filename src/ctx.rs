@@ -212,8 +212,8 @@ pub trait AdelaideContext: salsa::Database {
     #[salsa::invoke(crate::lowering::lower_pollstate_item)]
     fn lower_pollstate_item(&self) -> AResult<Id<LEnum>>;
 
-    #[salsa::invoke(crate::lowering::lower_awaitable_item)]
-    fn lower_awaitable_item(&self) -> AResult<Id<LObject>>;
+    #[salsa::invoke(crate::lowering::lower_generator_item)]
+    fn lower_generator_item(&self) -> AResult<Id<LObject>>;
 
     #[salsa::invoke(crate::lowering::lower_concrete_item)]
     fn lower_concrete_item(&self) -> AResult<Id<LTrait>>;

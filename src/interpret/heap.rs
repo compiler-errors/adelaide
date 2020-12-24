@@ -9,7 +9,7 @@ use crate::{
     util::Id,
 };
 
-use super::thread::{fresh_thread_id, Control, State, Thread, ThreadId};
+use super::thread::{fresh_thread_id, Control, Thread, ThreadId};
 
 pub struct Heap<'a> {
     pub globals: HashMap<Id<LGlobal>, Value<'a>>,
@@ -19,7 +19,7 @@ pub struct Heap<'a> {
     pub blocked_threads: HashMap<ThreadId, Thread<'a>>,
 
     pub objects: HashMap<ObjectId, Vec<Value<'a>>>,
-    pub awaitables: HashMap<AwaitableId, Awaitable<'a>>,
+    pub generators: HashMap<GeneratorId, Generator<'a>>,
     pub dyn_boxes: HashMap<DynId, DynBox<'a>>,
 }
 
@@ -32,7 +32,7 @@ pub enum Value<'a> {
     Struct(Vec<Value<'a>>),
     Variant(&'a str, Vec<Value<'a>>),
     Object(ObjectId, usize, usize),
-    Awaitable(AwaitableId),
+    Generator(GeneratorId),
     Dyn(DynId),
     // TODO: Is this better represented by an `Option<Arc<[_]>>`?
     // Makes the callable slightly more cloneable.
@@ -49,10 +49,10 @@ impl<'a> Value<'a> {
     }
 }
 
-pub enum Awaitable<'a> {
+pub enum Generator<'a> {
     Incomplete {
         stack_rev: Vec<Control<'a>>,
-        slots_rev: Vec<Vec<Value<'a>>>,
+        slots: Vec<Value<'a>>,
     },
     Evaluating,
     Complete(Value<'a>),
@@ -70,7 +70,7 @@ impl<'a> Heap<'a> {
             blocked_threads: hashmap! {},
 
             objects: hashmap! {},
-            awaitables: hashmap! {},
+            generators: hashmap! {},
             dyn_boxes: hashmap! {},
         }
     }
@@ -84,18 +84,23 @@ impl<'a> Heap<'a> {
         Value::Object(id, 0, len)
     }
 
-    pub fn allocate_async(&mut self, slots: Vec<Value<'a>>, expr: CExpression<'a>) -> Value<'a> {
+    pub fn allocate_generator(
+        &mut self,
+        slots: Vec<Value<'a>>,
+        in_slot: Option<CStackId>,
+        expr: CExpression<'a>,
+    ) -> Value<'a> {
         let id = fresh_id();
 
-        self.awaitables.insert(id, Awaitable::Incomplete {
+        self.generators.insert(id, Generator::Incomplete {
             stack_rev: vec![
-                Control::Parked(State::Expression(expr)),
-                Control::AsyncScope(Value::Awaitable(id)),
+                Control::FirstResume(in_slot, expr),
+                Control::GeneratorScope(Value::Generator(id)),
             ],
-            slots_rev: vec![slots],
+            slots,
         });
 
-        Value::Awaitable(id)
+        Value::Generator(id)
     }
 
     pub fn allocate_dyn(&mut self, value: Value<'a>, vtable: CVTable<'a>) -> Value<'a> {
@@ -131,35 +136,34 @@ impl<'a> Heap<'a> {
         }
     }
 
-    pub fn store_awaitable_evaluating(&mut self, awaitable: Value<'a>) -> Awaitable<'a> {
-        if let Value::Awaitable(id) = awaitable {
-            self.awaitables.insert(id, Awaitable::Evaluating).unwrap()
+    pub fn store_generator_evaluating(&mut self, generator: Value<'a>) -> Generator<'a> {
+        if let Value::Generator(id) = generator {
+            self.generators.insert(id, Generator::Evaluating).unwrap()
         } else {
             unreachable!();
         }
     }
 
-    pub fn store_awaitable_incomplete(
+    pub fn store_generator_incomplete(
         &mut self,
-        awaitable: Value<'a>,
+        generator: Value<'a>,
         stack_rev: Vec<Control<'a>>,
-        slots_rev: Vec<Vec<Value<'a>>>,
+        slots: Vec<Value<'a>>,
     ) {
-        if let Value::Awaitable(id) = awaitable {
-            let incomplete = self.awaitables.insert(id, Awaitable::Incomplete {
-                stack_rev,
-                slots_rev,
-            });
-            assert!(matches!(incomplete, Some(Awaitable::Evaluating)));
+        if let Value::Generator(id) = generator {
+            let incomplete = self
+                .generators
+                .insert(id, Generator::Incomplete { stack_rev, slots });
+            assert!(matches!(incomplete, Some(Generator::Evaluating)));
         } else {
             unreachable!();
         }
     }
 
-    pub fn store_awaitable_complete(&mut self, awaitable: Value<'a>, value: Value<'a>) {
-        if let Value::Awaitable(id) = awaitable {
-            let incomplete = self.awaitables.insert(id, Awaitable::Complete(value));
-            assert!(matches!(incomplete, Some(Awaitable::Evaluating)));
+    pub fn store_generator_complete(&mut self, generator: Value<'a>, value: Value<'a>) {
+        if let Value::Generator(id) = generator {
+            let incomplete = self.generators.insert(id, Generator::Complete(value));
+            assert!(matches!(incomplete, Some(Generator::Evaluating)));
         } else {
             unreachable!();
         }
@@ -215,6 +219,26 @@ impl<'a> Heap<'a> {
             self.push_ready_thread(thread);
         }
     }
+
+    pub fn block_on_thread(
+        &mut self,
+        blocked_thread: &mut Thread,
+        blocking_thread_id: ThreadId,
+    ) -> bool {
+        if let Some(blocking_thread) = self.ready_threads.get_mut(&blocking_thread_id) {
+            blocking_thread.blocking.insert(blocked_thread.id);
+            blocked_thread.blocked_on.insert(blocking_thread_id);
+            return true;
+        }
+
+        if let Some(blocking_thread) = self.blocked_threads.get_mut(&blocking_thread_id) {
+            blocking_thread.blocking.insert(blocked_thread.id);
+            blocked_thread.blocked_on.insert(blocking_thread_id);
+            return true;
+        }
+
+        false
+    }
 }
 
 #[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Debug)]
@@ -227,9 +251,9 @@ impl From<usize> for ObjectId {
 }
 
 #[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Debug)]
-pub struct AwaitableId(pub usize);
+pub struct GeneratorId(pub usize);
 
-impl From<usize> for AwaitableId {
+impl From<usize> for GeneratorId {
     fn from(u: usize) -> Self {
         Self(u)
     }

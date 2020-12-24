@@ -1,3 +1,4 @@
+use asynchronous::*.
 use lang::*.
 use iterator::*.
 use option::{*, Option::{None, Some}}.
@@ -32,11 +33,11 @@ fn unimplemented<T>() -> T = {
 
 fn assert_impl(b: Bool) = {
   if !b {
-    panic:<()>("Assert failed").
+    panic("Assert failed").
   }
 }.
 
-fn panic<T>(s: String) -> T = {
+fn panic(s: String) -> ! = {
   println("PANIC: " + s).
   breakpoint().
 

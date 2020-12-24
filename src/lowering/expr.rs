@@ -8,9 +8,9 @@ use crate::{
 };
 
 use super::{
-    fresh_name, ty::LTypeData, LConstructorShape, LEnum, LFunction, LGlobal, LObject, LPattern,
-    LPatternData, LScopeItem, LTraitType, LType, LVariable, LVariableContext, LoopId,
-    LoweringContext,
+    fresh_id, fresh_name, ty::LTypeData, LConstructorShape, LEnum, LFunction, LGlobal, LObject,
+    LPattern, LPatternData, LScopeItem, LTraitType, LType, LVariable, LVariableContext, LoopId,
+    LoweringContext, ScopeKind,
 };
 
 #[derive(Debug, Hash, Eq, PartialEq, Lookup, PrettyPrint)]
@@ -26,7 +26,6 @@ pub enum LExpressionData {
     Literal(LLiteral),
     Variable(LVariable),
     Block(Vec<Id<LStatement>>, Id<LExpression>),
-    AsyncBlock(LVariableContext, Id<LExpression>, Id<LType>),
     Global(LId<LGlobal>),
     GlobalFunction(LId<LFunction>, Vec<Id<LType>>),
     Access(Id<LExpression>, Span, Id<str>, Id<LType>),
@@ -47,6 +46,7 @@ pub enum LExpressionData {
     Or(Id<LExpression>, Id<LExpression>),
     And(Id<LExpression>, Id<LExpression>),
     Return(Id<LExpression>),
+    Yield(Id<LExpression>),
     Break(LoopId, Id<LExpression>),
     Continue(LoopId),
     StructConstructor(LId<LObject>, Vec<Id<LType>>, Vec<(usize, Id<LExpression>)>),
@@ -60,6 +60,13 @@ pub enum LExpressionData {
     Closure(
         LVariableContext,
         Vec<Id<LPattern>>,
+        Id<LType>,
+        Id<LExpression>,
+    ),
+    Generator(
+        LVariableContext,
+        Option<LVariable>,
+        Id<LType>,
         Id<LType>,
         Id<LExpression>,
     ),
@@ -179,12 +186,48 @@ impl LoweringContext<'_> {
 
                 LExpressionData::Block(s, e)
             },
-            PExpressionData::AsyncBlock(e) => {
-                self.enter_context(true, true);
-                let e = self.lower_expr(*e)?;
+            PExpressionData::AsyncBlock(expr) => {
+                self.enter_context(ScopeKind::Async);
+                let expr = self.lower_expr(*expr)?;
                 let ctx = self.exit_context();
 
-                LExpressionData::AsyncBlock(ctx, e, self.fresh_infer_ty(*span))
+                if let (
+                    LScopeItem::Object(awaitable_object),
+                    LScopeItem::Object(await_incomplete_struct),
+                ) = (
+                    self.ctx.std_item("AsyncBlock"),
+                    self.ctx.std_item("AwaitIncomplete"),
+                ) {
+                    LExpressionData::StructConstructor(
+                        awaitable_object.into(),
+                        vec![self.fresh_infer_ty(*span)],
+                        vec![(
+                            0,
+                            LExpression {
+                                source: e,
+                                span: *span,
+                                // Generator<(), AwaitIncomplete, T> of expr
+                                data: LExpressionData::Generator(
+                                    ctx,
+                                    None,
+                                    self.fresh_infer_ty(*span),
+                                    LType {
+                                        span: *span,
+                                        data: LTypeData::Object(
+                                            await_incomplete_struct.into(),
+                                            vec![],
+                                        ),
+                                    }
+                                    .intern(self.ctx),
+                                    expr,
+                                ),
+                            }
+                            .intern(self.ctx),
+                        )],
+                    )
+                } else {
+                    unreachable!()
+                }
             },
             PExpressionData::Tuple(es) => LExpressionData::Tuple(self.lower_exprs(es)?),
             PExpressionData::ArrayLiteral(es) =>
@@ -596,7 +639,7 @@ impl LoweringContext<'_> {
                 self.lower_expr(*e)?,
             ),
             PExpressionData::IfLet(p, v, t, els) =>
-                self.lower_if_let(e, *span, *p, *v, *t, *els)?,
+                self.lower_expr_if_let(e, *span, *p, *v, *t, *els)?,
             PExpressionData::While(l, p, t, els) =>
                 self.lower_expr_while(e, *span, *l, *p, *t, *els)?,
             PExpressionData::WhileLet(l, p, v, t, els) =>
@@ -690,10 +733,10 @@ impl LoweringContext<'_> {
             },
             PExpressionData::Allocate(p, g, a) => match self.lookup_path(p)? {
                 LScopeItem::Object(o) => {
-                    if LScopeItem::Object(o) == self.ctx.std_item("Awaitable") {
+                    if LScopeItem::Object(o) == self.ctx.std_item("AsyncBlock") {
                         return Err(AError::CannotConstruct {
                             kind: "object",
-                            name: self.ctx.static_name("Awaitable"),
+                            name: self.ctx.static_name("AsyncBlock"),
                             use_span: *span,
                             def_span: o.lookup(self.ctx).span,
                         });
@@ -728,12 +771,19 @@ impl LoweringContext<'_> {
                     });
                 },
             },
-            PExpressionData::Return(v) =>
-                if self.scopes.last_mut().unwrap().return_allowed {
-                    LExpressionData::Return(self.lower_expr(*v)?)
-                } else {
+            PExpressionData::Return(v) => match self.scopes.last_mut().unwrap().kind {
+                ScopeKind::Returnable | ScopeKind::Async | ScopeKind::Generator =>
+                    LExpressionData::Return(self.lower_expr(*v)?),
+                ScopeKind::None => {
                     return Err(AError::IllegalReturn { span: *span });
                 },
+            },
+            PExpressionData::Yield(v) => match self.scopes.last_mut().unwrap().kind {
+                ScopeKind::Generator => LExpressionData::Yield(self.lower_expr(*v)?),
+                ScopeKind::None | ScopeKind::Returnable | ScopeKind::Async => {
+                    return Err(AError::IllegalReturn { span: *span });
+                },
+            },
             PExpressionData::Assert(v) => {
                 if let LScopeItem::Function(assert) = self.ctx.std_item("assert_impl") {
                     LExpressionData::Call(assert.into(), vec![], vec![self.lower_expr(*v)?])
@@ -765,7 +815,7 @@ impl LoweringContext<'_> {
                 LExpressionData::Continue(self.lookup_label(s, l)?)
             },
             PExpressionData::Closure(ps, r, e) => {
-                self.enter_context(true, false);
+                self.enter_context(ScopeKind::Returnable);
 
                 let ps = self.lower_patterns(ps)?;
                 let e = self.lower_expr(*e)?;
@@ -774,6 +824,23 @@ impl LoweringContext<'_> {
                 let vcx = self.exit_context();
 
                 LExpressionData::Closure(vcx, ps, r, e)
+            },
+            PExpressionData::GeneratorBlock(p, r, y, e) => {
+                self.enter_context(ScopeKind::Generator);
+
+                let p = p
+                    .map(|(s, n, t)| -> AResult<_> {
+                        let t = self.lower_ty(t, false, true)?;
+                        Ok(self.declare_variable(n, s, t))
+                    })
+                    .transpose()?;
+                let e = self.lower_expr(*e)?;
+                let r = self.lower_ty(*r, true, true)?;
+                let y = self.lower_ty(*y, true, true)?;
+
+                let vcx = self.exit_context();
+
+                LExpressionData::Generator(vcx, p, r, y, e)
             },
             PExpressionData::Throw(t) => self.lower_expr_throw(e, *span, *t)?,
             PExpressionData::Index(a, i) => {
@@ -806,26 +873,11 @@ impl LoweringContext<'_> {
                     self.fresh_infer_ty(*span),
                 )
             },
-            PExpressionData::Await(a) => {
-                if !self.scopes.last().unwrap().await_allowed {
+            PExpressionData::Await(a) => match self.scopes.last().unwrap().kind {
+                ScopeKind::Async => self.lower_expr_await(e, *span, *a)?,
+                ScopeKind::None | ScopeKind::Returnable | ScopeKind::Generator => {
                     return Err(AError::IllegalAwait { span: *span });
-                }
-
-                let a = self.lower_expr(*a)?;
-
-                // Lower `e:await` into `poll_trampoline(p)`, which will do all of the heavy
-                // work of unwinding the stack when our awaitable is incomplete
-                if let LScopeItem::Function(trampoline_call) =
-                    self.ctx.std_item("internal_poll_trampoline")
-                {
-                    LExpressionData::Call(
-                        trampoline_call.into(),
-                        vec![self.fresh_infer_ty(*span)],
-                        vec![a],
-                    )
-                } else {
-                    unreachable!()
-                }
+                },
             },
         };
 
@@ -913,9 +965,262 @@ impl LoweringContext<'_> {
         Ok(ret)
     }
 
-    fn lower_if_let(
+    fn lower_expr_await(
         &mut self,
         source: Id<PExpression>,
+        span: Span,
+        value: Id<PExpression>,
+    ) -> AResult<LExpressionData> {
+        /*
+        {
+            let poll = POLL.
+            loop {
+                match poll:poll() {
+                    (PollState::Complete(value), _) =>
+                        break value,
+                    (PollState::Incomplete, new_poll) => {
+                        poll = new_poll.
+                        yield AwaitableIncomplete
+                    },
+                }
+            }
+        }
+        */
+        let await_loop_id = fresh_id();
+        let poll_var = self.declare_variable(
+            fresh_name("poll").intern(self.ctx),
+            span,
+            self.fresh_infer_ty(span),
+        );
+        let new_poll_var = self.declare_variable(
+            fresh_name("poll").intern(self.ctx),
+            span,
+            self.fresh_infer_ty(span),
+        );
+        let value_var = self.declare_variable(
+            fresh_name("poll").intern(self.ctx),
+            span,
+            self.fresh_infer_ty(span),
+        );
+
+        let poll_let_stmt = LStatement {
+            source: None,
+            span,
+            data: LStatementData::Let(
+                LPattern {
+                    source: None,
+                    span,
+                    data: LPatternData::Variable(poll_var),
+                    ty: None,
+                }
+                .intern(self.ctx),
+                self.lower_expr(value)?,
+            ),
+        }
+        .intern(self.ctx);
+
+        let poll_call_expr = LExpression {
+            source,
+            span,
+            data: self.std_static_call(
+                true,
+                self.fresh_infer_ty(span),
+                "Poll",
+                vec![],
+                "poll",
+                vec![],
+                vec![LExpression {
+                    source,
+                    span,
+                    data: LExpressionData::Variable(poll_var),
+                }
+                .intern(self.ctx)],
+                span,
+            ),
+        }
+        .intern(self.ctx);
+
+        let poll_state_enum =
+            if let LScopeItem::Enum(poll_state_enum) = self.ctx.std_item("PollState") {
+                poll_state_enum
+            } else {
+                unreachable!()
+            };
+
+        let complete_pattern = LPattern {
+            source: None,
+            span,
+            data: LPatternData::Tuple(vec![
+                LPattern {
+                    source: None,
+                    span,
+                    data: LPatternData::EnumVariantPattern(
+                        poll_state_enum.into(),
+                        vec![self.fresh_infer_ty(span)],
+                        self.ctx.static_name("Complete"),
+                        vec![LPattern {
+                            source: None,
+                            span,
+                            data: LPatternData::Variable(value_var),
+                            ty: None,
+                        }
+                        .intern(self.ctx)],
+                    ),
+                    ty: None,
+                }
+                .intern(self.ctx),
+                LPattern {
+                    source: None,
+                    span,
+                    data: LPatternData::Underscore(self.fresh_infer_ty(span)),
+                    ty: None,
+                }
+                .intern(self.ctx),
+            ]),
+            ty: None,
+        }
+        .intern(self.ctx);
+
+        let complete_expr = LExpression {
+            source,
+            span,
+            data: LExpressionData::Break(
+                await_loop_id,
+                LExpression {
+                    source,
+                    span,
+                    data: LExpressionData::Variable(value_var),
+                }
+                .intern(self.ctx),
+            ),
+        }
+        .intern(self.ctx);
+
+        let incomplete_pattern = LPattern {
+            source: None,
+            span,
+            data: LPatternData::Tuple(vec![
+                LPattern {
+                    source: None,
+                    span,
+                    data: LPatternData::EnumVariantPattern(
+                        poll_state_enum.into(),
+                        vec![self.fresh_infer_ty(span)],
+                        self.ctx.static_name("Incomplete"),
+                        vec![],
+                    ),
+                    ty: None,
+                }
+                .intern(self.ctx),
+                LPattern {
+                    source: None,
+                    span,
+                    data: LPatternData::Variable(new_poll_var),
+                    ty: None,
+                }
+                .intern(self.ctx),
+            ]),
+            ty: None,
+        }
+        .intern(self.ctx);
+
+        let await_incomplete_struct = if let LScopeItem::Object(awaitable_incomplete_struct) =
+            self.ctx.std_item("AwaitIncomplete")
+        {
+            awaitable_incomplete_struct
+        } else {
+            unreachable!()
+        };
+
+        let incomplete_expr = LExpression {
+            source,
+            span,
+            data: LExpressionData::Block(
+                vec![
+                    LStatement {
+                        source: None,
+                        span,
+                        data: LStatementData::Expression(
+                            LExpression {
+                                source,
+                                span,
+                                data: LExpressionData::Assign(
+                                    LExpression {
+                                        source,
+                                        span,
+                                        data: LExpressionData::Variable(poll_var),
+                                    }
+                                    .intern(self.ctx),
+                                    LExpression {
+                                        source,
+                                        span,
+                                        data: LExpressionData::Variable(new_poll_var),
+                                    }
+                                    .intern(self.ctx),
+                                ),
+                            }
+                            .intern(self.ctx),
+                        ),
+                    }
+                    .intern(self.ctx),
+                    LStatement {
+                        source: None,
+                        span,
+                        data: LStatementData::Expression(
+                            LExpression {
+                                source,
+                                span,
+                                data: LExpressionData::Yield(
+                                    LExpression {
+                                        source,
+                                        span,
+                                        data: LExpressionData::StructConstructor(
+                                            await_incomplete_struct.into(),
+                                            vec![],
+                                            vec![],
+                                        ),
+                                    }
+                                    .intern(self.ctx),
+                                ),
+                            }
+                            .intern(self.ctx),
+                        ),
+                    }
+                    .intern(self.ctx),
+                ],
+                LExpression {
+                    source,
+                    span,
+                    data: LExpressionData::Tuple(vec![]),
+                }
+                .intern(self.ctx),
+            ),
+        }
+        .intern(self.ctx);
+
+        let match_stmt = LExpression {
+            source,
+            span,
+            data: LExpressionData::Match(poll_call_expr, vec![
+                (complete_pattern, complete_expr),
+                (incomplete_pattern, incomplete_expr),
+            ]),
+        }
+        .intern(self.ctx);
+
+        let await_loop = LExpression {
+            source,
+            span,
+            data: LExpressionData::Loop(await_loop_id, match_stmt, self.fresh_infer_ty(span)),
+        }
+        .intern(self.ctx);
+
+        Ok(LExpressionData::Block(vec![poll_let_stmt], await_loop))
+    }
+
+    fn lower_expr_if_let(
+        &mut self,
+        _source: Id<PExpression>,
         span: Span,
         pattern: Id<PPattern>,
         value: Id<PExpression>,
@@ -950,6 +1255,7 @@ impl LoweringContext<'_> {
 
         let label = self.enter_label(label);
         let then_expr = self.lower_expr(then_expr)?;
+        self.exit_label();
 
         let else_expr = LExpression {
             source,
@@ -982,10 +1288,11 @@ impl LoweringContext<'_> {
     ) -> AResult<LExpressionData> {
         let condition = self.lower_expr(condition)?;
 
-        let label = self.enter_label(label);
         self.enter_block();
+        let label = self.enter_label(label);
         let then_pattern = self.lower_pattern(pattern)?;
         let then_expr = self.lower_expr(then_expr)?;
+        self.exit_label();
         self.exit_block();
 
         let else_expr = LExpression {
@@ -1221,8 +1528,11 @@ impl LoweringContext<'_> {
         }
         .intern(self.ctx);
 
-        if !self.scopes.last_mut().unwrap().return_allowed {
-            return Err(AError::IllegalReturn { span });
+        match self.scopes.last_mut().unwrap().kind {
+            ScopeKind::Returnable | ScopeKind::Async | ScopeKind::Generator => { /* allowed */ },
+            ScopeKind::None => {
+                return Err(AError::IllegalReturn { span });
+            },
         }
 
         let good_ty = self.fresh_infer_ty(span);

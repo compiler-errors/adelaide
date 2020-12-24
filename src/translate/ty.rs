@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use crate::{
     lowering::{fresh_id, LEnum, LObject, LTrait, LType},
     typechecker::{TTraitType, TTraitTypeWithBindings, TType, Typechecker},

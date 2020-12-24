@@ -91,7 +91,7 @@ impl<T> Self for List<T> {
     } else if idx == self:size {
       self:push_back(item).
     } else if idx < 0 {
-      panic:<()>("Invalid index to insert at: \(idx)").
+      panic("Invalid index to insert at: \(idx)").
     } else {
       match Self::get_node_internal(self:root, idx - 1) {
         Some(node) => {
@@ -99,7 +99,7 @@ impl<T> Self for List<T> {
           node:link_after(new_link).
         },
         None => {
-          panic:<()>("Invalid index to insert at: \(idx)").
+          panic("Invalid index to insert at: \(idx)").
         },
       }
     }
@@ -107,7 +107,7 @@ impl<T> Self for List<T> {
 
   fn remove(self, idx: Int) -> T = {
     if idx < 0 | idx >= self:size {
-      panic:<()>("Invalid index to insert at: \(idx)").
+      panic("Invalid index to insert at: \(idx)").
     }
 
     if idx == 0 {
@@ -202,7 +202,7 @@ impl<T> Deref<Int> for List<T> {
 
   fn deref(self, idx: Int) -> T = {
     if idx < 0 | idx >= self:len() {
-      panic:<()>("Index \(idx) out of bounds. Size is \(self:len())::").
+      panic("Index \(idx) out of bounds. Size is \(self:len())::").
     }
 
     Self::get_node_internal(self:root, idx):unwrap():item
@@ -212,7 +212,7 @@ impl<T> Deref<Int> for List<T> {
 impl<T> DerefAssign<Int> for List<T> {
   fn deref_assign(self, idx: Int, value: T) -> T = {
     if idx >= self:len() {
-      panic:<()>("Index \(idx) out of bounds. Size is \(self:len())::").
+      panic("Index \(idx) out of bounds. Size is \(self:len())::").
     }
 
     Self::get_node_internal(self:root, idx):unwrap():item = value.

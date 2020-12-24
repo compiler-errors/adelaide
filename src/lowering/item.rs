@@ -12,7 +12,7 @@ use crate::{
 use super::{
     fresh_id, ty::LTypeData, LEnum, LFunction, LGeneric, LGlobal, LImpl, LImplMethod, LMembers,
     LModule, LObject, LScopeItem, LTrait, LTraitMethod, LTraitShape, LTraitTypeWithBindings, LType,
-    LoweringContext,
+    LoweringContext, ScopeKind,
 };
 
 impl LoweringContext<'_> {
@@ -86,7 +86,7 @@ impl LoweringContext<'_> {
             ..
         } = &*g.lookup(self.ctx);
 
-        self.enter_context(false, false);
+        self.enter_context(ScopeKind::None);
 
         let ty = self.lower_ty(*ty, false, true)?;
         let expr = self.lower_expr(*expr)?;
@@ -118,7 +118,7 @@ impl LoweringContext<'_> {
             body,
         } = &*f.lookup(self.ctx);
 
-        self.enter_context(true, false);
+        self.enter_context(ScopeKind::Returnable);
 
         let gs = generics
             .iter()
@@ -168,7 +168,7 @@ impl LoweringContext<'_> {
             members,
         } = &*o.lookup(self.ctx);
 
-        self.enter_context(false, false);
+        self.enter_context(ScopeKind::None);
 
         let gs = generics
             .iter()
@@ -254,7 +254,7 @@ impl LoweringContext<'_> {
             variants,
         } = &*e.lookup(self.ctx);
 
-        self.enter_context(false, false);
+        self.enter_context(ScopeKind::None);
 
         let gs = generics
             .iter()
@@ -323,7 +323,7 @@ impl LoweringContext<'_> {
             members,
         } = &*t.lookup(self.ctx);
 
-        self.enter_context(false, false);
+        self.enter_context(ScopeKind::None);
 
         let self_skolem = LGeneric {
             id: fresh_id(),
@@ -381,7 +381,7 @@ impl LoweringContext<'_> {
                         });
                     }
 
-                    self.enter_context(true, false);
+                    self.enter_context(ScopeKind::Returnable);
 
                     let gs = generics
                         .iter()
@@ -456,7 +456,7 @@ impl LoweringContext<'_> {
             members,
         } = &*i.lookup(self.ctx);
 
-        self.enter_context(false, false);
+        self.enter_context(ScopeKind::None);
 
         let gs = generics
             .iter()
@@ -537,7 +537,7 @@ impl LoweringContext<'_> {
                         });
                     }
 
-                    self.enter_context(true, false);
+                    self.enter_context(ScopeKind::Returnable);
 
                     let gs = generics
                         .iter()

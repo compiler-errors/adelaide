@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use crate::{
-    lexer::Span,
     lowering::{LPattern, LPatternData, VariableId},
     typechecker::Typechecker,
     util::{AResult, Id, TryCollectVec},

@@ -16,11 +16,11 @@ impl<T> Deref<Int> for [T] {
   type Result = T.
 
   fn deref(self, idx: Int) -> T = {
-      // if idx < 0 |? idx >= self:len() {
-      //  panic:<()>("Index out of bounds for \(type_string:<Self>())... length = \(self:len()), index = \(idx).").
-      // }
+    if idx < 0 |? idx >= self:len() {
+      panic("Index out of bounds for \(type_string_of:<Self>())... length = \(self:len()), index = \(idx).").
+    }
 
-      internal_array_deref(self, idx)
+    internal_array_deref(self, idx)
   }.
 }
 
@@ -33,23 +33,23 @@ impl<T> Deref<RangeIterator> for [T] {
     let (start, end) = match idx {
       RangeIterator::Inclusive(a, b) => {
         if a > b {
-          panic:<()>("Start index of array slice is greater than end. Start = \(a), End = \(b).").
+          panic("Start index of array slice is greater than end. Start = \(a), End = \(b).").
+        }
+
+        (a, b + 1)
+      },
+      RangeIterator::Exclusive(a, b) => {
+        if a > b {
+          panic("Start index of array slice is greater than end. Start = \(a), End = \(b).").
         }
 
         (a, b)
       },
-      RangeIterator::Exclusive(a, b) => {
-        if a > b {
-          panic:<()>("Start index of array slice is greater than end. Start = \(a), End = \(b).").
-        }
-
-        (a, b - 1)
-      },
-      RangeIterator::Infinite(a) => (a, self:len()),
+      RangeIterator::Infinite(a) => (a, len),
     }.
 
     if 0 > start {
-      panic:<()>("Start index of array slice is less than 0. Start = \(start)").
+      panic("Start index of array slice is less than 0. Start = \(start)").
     }
 
     if start > len {
@@ -69,7 +69,7 @@ impl Deref<Int> for String {
 
   fn deref(self, idx: Int) -> Char = {
     if idx < 0 |? idx >= self:len() {
-      panic:<()>("Index out of bounds for String... length = \(self:len()), index = \(idx).").
+      panic("Index out of bounds for String... length = \(self:len()), index = \(idx).").
     }
 
     internal_string_deref(self, idx)
@@ -85,6 +85,9 @@ trait DerefAssign<Idx> where Self: Deref<Idx> {
 
 impl<T> DerefAssign<Int> for [T] {
   fn deref_assign(self, idx: Int, value: T) -> T = {
-      internal_array_store(self, idx, value)
+    if idx < 0 |? idx >= self:len() {
+      panic("Index out of bounds for \(type_string_of:<Self>())... length = \(self:len()), index = \(idx).").
+    }
+    internal_array_store(self, idx, value)
   }.
 }

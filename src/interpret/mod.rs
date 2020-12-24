@@ -14,7 +14,7 @@ use crate::{
         CExpression, CFunction, CLiteral, CPattern, CProgram, CStackId, CStatement, Translator,
     },
     typechecker::{typecheck_program, Typechecker},
-    util::{AError, AResult, Pretty, ZipExact},
+    util::{AError, AResult, ZipExact},
 };
 
 use self::{
@@ -47,7 +47,8 @@ pub enum IError {
     Exit,
     Panic,
     Deadlock,
-    DoubleAwait,
+    DoubleResume,
+    ResumeAfterComplete,
     NoPattern,
     Oof(Span),
 }
@@ -185,12 +186,12 @@ impl<'a> Interpreter<'a> {
                 thread.control.push(Control::Block(&stmts[1..], *expr));
                 State::Statement(stmts[0])
             },
-            CExpression::AsyncBlock(slots, captures, expr) => {
+            CExpression::Generator(slots, captures, in_slot, expr) => {
                 let mut slots = vec![Value::Undefined; slots];
                 for (old_id, new_id) in captures.0 {
                     slots[new_id.0] = thread.slots.last().unwrap()[old_id.0].clone();
                 }
-                State::Value(heap.allocate_async(slots, *expr))
+                State::Value(heap.allocate_generator(slots, in_slot, *expr))
             },
             CExpression::Global(id) => State::Value(heap.globals[&id].clone()),
             CExpression::GlobalFunction(id) =>
@@ -262,6 +263,10 @@ impl<'a> Interpreter<'a> {
             },
             CExpression::Return(expr) => {
                 thread.control.push(Control::Return);
+                State::Expression(*expr)
+            },
+            CExpression::Yield(expr) => {
+                thread.control.push(Control::Yield);
                 State::Expression(*expr)
             },
             CExpression::Break(id, expr) => {
@@ -351,9 +356,9 @@ impl<'a> Interpreter<'a> {
         let state = match stmt {
             CStatement::Let(pattern, expr) => {
                 thread.control.push(Control::InfallibleApply(pattern));
-                State::Expression(expr)
+                self.apply_expression(heap, thread, expr)?
             },
-            CStatement::Expression(expr) => State::Expression(expr),
+            CStatement::Expression(expr) => self.apply_expression(heap, thread, expr)?,
         };
 
         Ok(state)
@@ -371,14 +376,21 @@ impl<'a> Interpreter<'a> {
                 thread.slots.pop().unwrap();
                 State::Value(value)
             },
-            Control::AsyncScope(awaitable) => {
+            Control::GeneratorScope(generator) => {
                 thread.slots.pop().unwrap();
-                heap.store_awaitable_complete(awaitable.clone(), value.clone());
+                heap.store_generator_complete(generator.clone(), value.clone());
 
                 State::Value(Value::Struct(vec![
                     Value::Variant("Complete", vec![value]),
-                    awaitable,
+                    generator,
                 ]))
+            },
+            Control::FirstResume(in_slot, expr) => {
+                if let Some(in_slot) = in_slot {
+                    thread.slots.last_mut().unwrap()[in_slot.0] = value;
+                }
+
+                State::Expression(expr)
             },
             Control::Block(&[], expr) => State::Expression(expr),
             Control::Block(stmts, expr) => {
@@ -454,6 +466,7 @@ impl<'a> Interpreter<'a> {
                 _ => unreachable!(),
             },
             Control::Return => self.do_return(heap, thread, value)?,
+            Control::Yield => self.do_yield(heap, thread, value)?,
             Control::Break(id) => self.do_break(thread, id, value)?,
             Control::Loop(id, expr) => {
                 thread.control.push(Control::Loop(id, expr));
@@ -560,7 +573,7 @@ impl<'a> Interpreter<'a> {
     fn do_continue(&self, thread: &mut Thread<'a>, id: LoopId) -> IResult<State<'a>> {
         loop {
             match thread.control.last() {
-                Some(Control::Scope) | Some(Control::AsyncScope(_)) | None => {
+                Some(Control::Scope) | Some(Control::GeneratorScope(_)) | None => {
                     unreachable!();
                 },
                 Some(Control::Loop(other_id, expr)) if *other_id == id => {
@@ -581,7 +594,7 @@ impl<'a> Interpreter<'a> {
     ) -> IResult<State<'a>> {
         loop {
             match thread.control.pop() {
-                Some(Control::Scope) | Some(Control::AsyncScope(_)) | None => {
+                Some(Control::Scope) | Some(Control::GeneratorScope(_)) | None => {
                     unreachable!();
                 },
                 Some(Control::Loop(other_id, _)) if other_id == id => {
@@ -603,13 +616,13 @@ impl<'a> Interpreter<'a> {
         loop {
             match thread.control.pop() {
                 None => unreachable!(),
-                Some(Control::AsyncScope(awaitable)) => {
+                Some(Control::GeneratorScope(generator)) => {
                     thread.slots.pop().unwrap();
-                    heap.store_awaitable_complete(awaitable.clone(), value.clone());
+                    heap.store_generator_complete(generator.clone(), value.clone());
 
                     return Ok(State::Value(Value::Struct(vec![
                         Value::Variant("Complete", vec![value]),
-                        awaitable,
+                        generator,
                     ])));
                 },
                 Some(Control::Scope) => {
@@ -618,6 +631,35 @@ impl<'a> Interpreter<'a> {
                 },
                 Some(_) => {
                     // Already popped...
+                },
+            }
+        }
+    }
+
+    fn do_yield(
+        &self,
+        heap: &mut Heap<'a>,
+        thread: &mut Thread<'a>,
+        value: Value<'a>,
+    ) -> IResult<State<'a>> {
+        let mut stack_rev = vec![];
+
+        loop {
+            match thread.control.pop() {
+                None | Some(Control::Scope) => unreachable!(),
+                Some(Control::GeneratorScope(generator)) => {
+                    let slots = thread.slots.pop().unwrap();
+                    stack_rev.push(Control::GeneratorScope(generator.clone()));
+
+                    heap.store_generator_incomplete(generator.clone(), stack_rev, slots);
+
+                    return Ok(State::Value(Value::Struct(vec![
+                        Value::Variant("Yield", vec![value]),
+                        generator,
+                    ])));
+                },
+                Some(control) => {
+                    stack_rev.push(control);
                 },
             }
         }

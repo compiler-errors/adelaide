@@ -79,6 +79,9 @@ pub enum Token {
     Instruction,
     Async,
     Await,
+    Gen,
+    Yield,
+    Yields,
 
     // Privileged Types
     Int,
@@ -181,6 +184,9 @@ impl Display for Token {
             Token::Instruction => write!(f, "\"instruction\""),
             Token::Async => write!(f, "\"async\""),
             Token::Await => write!(f, "\"await\""),
+            Token::Gen => write!(f, "\"gen\""),
+            Token::Yield => write!(f, "\"yield\""),
+            Token::Yields => write!(f, "\"yields\""),
             Token::Int => write!(f, "\"Int\""),
             Token::Float => write!(f, "\"Float\""),
             Token::Bool => write!(f, "\"Bool\""),

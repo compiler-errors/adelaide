@@ -2,7 +2,7 @@ fn main() = {
     async_main():wait().
 }.
 
-async fn main() = {
+async fn async_main() = {
     println("Starting.").
     
     println("\nFirst, let's await two timers 2000ms + 1000ms in serial").

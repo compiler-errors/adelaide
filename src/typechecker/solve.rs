@@ -674,7 +674,7 @@ impl Typechecker<'_> {
             .get_traits_accessible_in_module(self.module.unwrap())?
         {
             if tr.lookup(self.ctx).types.contains_key(&name) {
-                if let Some(other_tr) = candidate_tr {
+                if let Some(_other_tr) = candidate_tr {
                     todo!("Die");
                 }
 
