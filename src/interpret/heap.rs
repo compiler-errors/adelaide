@@ -23,7 +23,7 @@ pub struct Heap<'a> {
     pub dyn_boxes: HashMap<DynId, DynBox<'a>>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Value<'a> {
     Undefined,
     Int(i64),

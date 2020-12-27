@@ -43,6 +43,18 @@ impl<T: PrettyPrint> PrettyPrint for Option<T> {
     }
 }
 
+impl<T: PrettyPrint> PrettyPrint for &'_ [T] {
+    fn fmt(&self, f: &mut Formatter, ctx: &dyn AdelaideContext) -> Result {
+        let mut h = f.debug_list();
+
+        for i in *self {
+            h.entry(&Pretty(i, ctx));
+        }
+
+        h.finish()
+    }
+}
+
 impl<T: PrettyPrint> PrettyPrint for Vec<T> {
     fn fmt(&self, f: &mut Formatter, ctx: &dyn AdelaideContext) -> Result {
         let mut h = f.debug_list();

@@ -173,6 +173,8 @@ impl<'a> Interpreter<'a> {
         thread: &mut Thread<'a>,
         expr: CExpression<'a>,
     ) -> IResult<State<'a>> {
+        debug!("Applying expr {:?}", expr);
+
         let state = match expr {
             CExpression::Literal(CLiteral::True) => State::Value(Value::Int(1)),
             CExpression::Literal(CLiteral::False) => State::Value(Value::Int(0)),
@@ -181,7 +183,7 @@ impl<'a> Interpreter<'a> {
             CExpression::Literal(CLiteral::Char(c)) => State::Value(Value::Int(c as i64)),
             CExpression::Literal(CLiteral::String(s)) => State::Value(Value::String(s.to_owned())),
             CExpression::Variable(v) => State::Value(thread.slots.last().unwrap()[v.0].clone()),
-            CExpression::Block(&[], expr) => State::Expression(*expr),
+            CExpression::Block([], expr) => State::Expression(*expr),
             CExpression::Block(stmts, expr) => {
                 thread.control.push(Control::Block(&stmts[1..], *expr));
                 State::Statement(stmts[0])
@@ -196,7 +198,7 @@ impl<'a> Interpreter<'a> {
             CExpression::Global(id) => State::Value(heap.globals[&id].clone()),
             CExpression::GlobalFunction(id) =>
                 State::Value(Value::Callable(vec![], self.program.functions[&id])),
-            CExpression::Call(fun, &[]) =>
+            CExpression::Call(fun, []) =>
                 self.do_call(heap, thread, self.program.functions[&fun], vec![], vec![])?,
             CExpression::Call(fun, values) => {
                 thread.control.push(Control::Invoke(
@@ -206,7 +208,7 @@ impl<'a> Interpreter<'a> {
                 ));
                 State::Expression(values[0])
             },
-            CExpression::Struct(&[]) => State::Value(Value::unit()),
+            CExpression::Struct([]) => State::Value(Value::unit()),
             CExpression::Struct(values) => {
                 let (idx, value) = values[0];
                 thread.control.push(Control::Struct(
@@ -216,7 +218,7 @@ impl<'a> Interpreter<'a> {
                 ));
                 State::Expression(value)
             },
-            CExpression::Object(&[]) => State::Value(heap.allocate(vec![])),
+            CExpression::Object([]) => State::Value(heap.allocate(vec![])),
             CExpression::Object(values) => {
                 let (idx, value) = values[0];
                 thread.control.push(Control::Object(
@@ -226,7 +228,7 @@ impl<'a> Interpreter<'a> {
                 ));
                 State::Expression(value)
             },
-            CExpression::Variant(var, &[]) => State::Value(Value::Variant(var, vec![])),
+            CExpression::Variant(var, []) => State::Value(Value::Variant(var, vec![])),
             CExpression::Variant(var, values) => {
                 let (idx, value) = values[0];
                 thread.control.push(Control::Variant(
@@ -303,6 +305,8 @@ impl<'a> Interpreter<'a> {
         thread: &mut Thread<'a>,
         expr: CExpression<'a>,
     ) -> IResult<State<'a>> {
+        debug!("Applying lval");
+
         if let Some(Control::Apply {
             rval,
             mut indices_rev,
@@ -353,6 +357,8 @@ impl<'a> Interpreter<'a> {
         thread: &mut Thread<'a>,
         stmt: CStatement<'a>,
     ) -> IResult<State<'a>> {
+        debug!("Applying stmt");
+
         let state = match stmt {
             CStatement::Let(pattern, expr) => {
                 thread.control.push(Control::InfallibleApply(pattern));
@@ -370,6 +376,8 @@ impl<'a> Interpreter<'a> {
         thread: &mut Thread<'a>,
         value: Value<'a>,
     ) -> IResult<State<'a>> {
+        debug!("Applying value {:?}", value);
+
         let new_state = match thread.control.pop().unwrap() {
             Control::Parked(_) | Control::Apply { .. } => unreachable!(),
             Control::Scope => {
@@ -392,12 +400,12 @@ impl<'a> Interpreter<'a> {
 
                 State::Expression(expr)
             },
-            Control::Block(&[], expr) => State::Expression(expr),
+            Control::Block([], expr) => State::Expression(expr),
             Control::Block(stmts, expr) => {
                 thread.control.push(Control::Block(&stmts[1..], expr));
                 State::Statement(stmts[0])
             },
-            Control::Invoke(fun, &[], mut args) => {
+            Control::Invoke(fun, [], mut args) => {
                 args.push(value);
                 self.do_call(heap, thread, fun, vec![], args)?
             },
@@ -406,7 +414,7 @@ impl<'a> Interpreter<'a> {
                 thread.control.push(Control::Invoke(fun, &exprs[1..], args));
                 State::Expression(exprs[0])
             },
-            Control::Struct(&[], mut values, idx) => {
+            Control::Struct([], mut values, idx) => {
                 values[idx] = value;
                 State::Value(Value::Struct(values))
             },
@@ -418,7 +426,7 @@ impl<'a> Interpreter<'a> {
                     .push(Control::Struct(&exprs[1..], values, idx));
                 State::Expression(expr)
             },
-            Control::Object(&[], mut values, idx) => {
+            Control::Object([], mut values, idx) => {
                 values[idx] = value;
                 State::Value(heap.allocate(values))
             },
@@ -430,7 +438,7 @@ impl<'a> Interpreter<'a> {
                     .push(Control::Object(&exprs[1..], values, idx));
                 State::Expression(expr)
             },
-            Control::Variant(variant, &[], mut values, idx) => {
+            Control::Variant(variant, [], mut values, idx) => {
                 values[idx] = value;
                 State::Value(Value::Variant(variant, values))
             },

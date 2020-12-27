@@ -1339,9 +1339,8 @@ impl LoweringContext<'_> {
             self.fresh_infer_ty(span),
         );
 
+        // `let iterator_var = <_ as Iterable>::iterator($iterable)`
         let iterable = self.lower_expr(iterable)?;
-        // lower the `ITERABLE` to
-        // `let ITERATOR_VAR = <_ as Iterable>::iterator(ITERABLE).`
         let iterable_to_iterator = LStatement {
             source: None,
             span,
@@ -1372,6 +1371,7 @@ impl LoweringContext<'_> {
         }
         .intern(self.ctx);
 
+        // `<_ as Iterator>::next(iterator_var)`
         let next_call = LExpression {
             source,
             span,
@@ -1400,11 +1400,8 @@ impl LoweringContext<'_> {
         };
 
         self.enter_block();
+        // `(Some($pattern), new_iterator_var) => ...`
         let pattern = self.lower_pattern(pattern)?;
-        // This is gnarly... So basically what happens here is:
-        // Destructure the return value from the `:next()` call into the new pattern
-        // `(NEW_ITERATOR_VAR, Some(PATTERN))`, both to capture the return iterator
-        // from next, and destructure the item that is yielded
         let good_pattern = LPattern {
             source: None,
             span,
@@ -1433,10 +1430,11 @@ impl LoweringContext<'_> {
         }
         .intern(self.ctx);
 
+        // `... => {
+        //   iterator_var = new_iterator_var.
+        //   $then_expr
+        // }`
         let label = self.enter_label(label);
-        // we need to insert the statement `ITERATOR_VAR = NEW_ITERATOR_VAR;`
-        // before our THEN block, to reassign this returned iterator back into
-        // what we're calling `:next()` on
         let good_path = LExpression {
             source,
             span,
@@ -1474,6 +1472,7 @@ impl LoweringContext<'_> {
         self.exit_label();
         self.exit_block();
 
+        // `_ => break $else_expr,`
         let bad_pattern = self.fresh_empty_pattern(span);
         let bad_path = LExpression {
             source,
@@ -1482,20 +1481,28 @@ impl LoweringContext<'_> {
         }
         .intern(self.ctx);
 
-        let unwrap_match = LExpression {
-            source,
-            span,
-            data: LExpressionData::Match(next_call, vec![
-                (good_pattern, good_path),
-                (bad_pattern, bad_path),
-            ]),
-        }
-        .intern(self.ctx);
-
+        // `label @ loop {
+        //    match {
+        //      good_pattern => good_path,
+        //      bad_pattern => bad_path,
+        //    }
+        // }`
         let unwrap_loop = LExpression {
             source,
             span,
-            data: LExpressionData::Loop(label, unwrap_match, self.fresh_infer_ty(span)),
+            data: LExpressionData::Loop(
+                label,
+                LExpression {
+                    source,
+                    span,
+                    data: LExpressionData::Match(next_call, vec![
+                        (good_pattern, good_path),
+                        (bad_pattern, bad_path),
+                    ]),
+                }
+                .intern(self.ctx),
+                self.fresh_infer_ty(span),
+            ),
         }
         .intern(self.ctx);
 
@@ -1511,6 +1518,7 @@ impl LoweringContext<'_> {
         span: Span,
         throwable: Id<PExpression>,
     ) -> AResult<LExpressionData> {
+        // `<_ as IntoResult>::into_result($throwable)`
         let throwable = self.lower_expr(throwable)?;
         let throwable = LExpression {
             source,
@@ -1557,13 +1565,7 @@ impl LoweringContext<'_> {
             self.fresh_infer_ty(span),
         );
 
-        let good_name = LPattern {
-            source: None,
-            span,
-            ty: Some(self.fresh_infer_ty(span)),
-            data: LPatternData::Variable(good_var),
-        }
-        .intern(self.ctx);
+        // `Result<Good, Bad>::Ok(good_var) => good_var,`
         let good_pattern = LPattern {
             source: None,
             span,
@@ -1572,7 +1574,13 @@ impl LoweringContext<'_> {
                 result_enum.into(),
                 vec![good_ty, bad_ty],
                 self.ctx.static_name("Ok"),
-                vec![good_name],
+                vec![LPattern {
+                    source: None,
+                    span,
+                    ty: Some(self.fresh_infer_ty(span)),
+                    data: LPatternData::Variable(good_var),
+                }
+                .intern(self.ctx)],
             ),
         }
         .intern(self.ctx);
@@ -1583,13 +1591,8 @@ impl LoweringContext<'_> {
         }
         .intern(self.ctx);
 
-        let bad_name = LPattern {
-            source: None,
-            span,
-            ty: Some(self.fresh_infer_ty(span)),
-            data: LPatternData::Variable(bad_var),
-        }
-        .intern(self.ctx);
+        // `Result<GoodBad>::Error(bad_var) =>
+        //    return <_ as IntoResult>::from_error(bad_var)`
         let bad_pattern = LPattern {
             source: None,
             span,
@@ -1598,7 +1601,13 @@ impl LoweringContext<'_> {
                 result_enum.into(),
                 vec![good_ty, bad_ty],
                 self.ctx.static_name("Error"),
-                vec![bad_name],
+                vec![LPattern {
+                    source: None,
+                    span,
+                    ty: Some(self.fresh_infer_ty(span)),
+                    data: LPatternData::Variable(bad_var),
+                }
+                .intern(self.ctx)],
             ),
         }
         .intern(self.ctx);

@@ -173,7 +173,7 @@ UseElement: Vec<PUseElement> = {
         PUseElement::plain_use(Span(file, l, h), i, r),
     <l:@L> <t:TypeName> <h:@R> <r:MaybeRename<TypeName>> =>
         PUseElement::plain_use(Span(file, l, h), t, r),
-    <l:@L> "self" <h:@R> <r:MaybeRename<TypeName>> =>
+    <l:@L> "self" <h:@R> <r:MaybeRename<Identifier>> =>
         PUseElement::self_use(Span(file, l, h), r),
     <l:@L> "*" <h:@R> =>
         PUseElement::use_all(Span(file, l, h)),
@@ -412,10 +412,6 @@ MaybeGenerics<Kind> = {
     () => vec![],
 };
 
-MaybeDynTraits: Vec<Id<PTraitTypeWithBindings>> = {
-    "<" <PlusSeparated<TraitTypeWithBindings>> ">",
-};
-
 MaybeGenericsOrAssoc = {
     ":<" <CommaTrailing<TypeOrBinding>> ">",
     "<" <CommaTrailing<TypeOrBinding>> ">",
@@ -625,7 +621,7 @@ CallableExpression<Kind>: Id<PExpression> = {
         PExpression::interpolation_begin(Span(file, l, h), s, s2).intern(ctx),
     <l:@L> <c:CallableExpression<Kind>> "(" <p:CommaTrailingOrEmpty<Expression>> ")" <h:@R> =>
         PExpression::expr_call(Span(file, l, h), c, p).intern(ctx),
-    <l:@L> <t:AssociableType<"Expr">> "::" <f:Identifier> <g:MaybeColonGenerics> "(" <p:CommaTrailingOrEmpty<Expression>> ")" <h:@R> =>
+    <l:@L> <t:AssociableType<"Expr">> "::" <f:Identifier> <g:MaybeGenerics<"Expr">> "(" <p:CommaTrailingOrEmpty<Expression>> ")" <h:@R> =>
         PExpression::static_call(Span(file, l, h), t, f, g, p).intern(ctx),
 };
 
@@ -647,7 +643,7 @@ UndottableExpression: Id<PExpression> = {
 };
 
 MaybeObjectCall: Option<(Vec<Id<PType>>, Vec<Id<PExpression>>)> = {
-    <MaybeColonGenerics> "(" <CommaTrailingOrEmpty<Expression>> ")" => Some((<>)),
+    <MaybeGenerics<"Expr">> "(" <CommaTrailingOrEmpty<Expression>> ")" => Some((<>)),
     () => None,
 };
 
@@ -702,22 +698,13 @@ MatchBranch: (Id<PPattern>, Id<PExpression>) = {
     <Pattern> "=>" <Expression> => (<>),
 };
 
-MaybeColonGenerics = {
-    ":<" <CommaTrailing<Type>> ">",
-    () => vec![],
-};
-
 ConstructorArguments<Kind>: PConstructorArguments = {
-    <NamedExpressionFields> if Kind != "PreBlock" => <>,
+    <l:@L> "{" <fs:CommaTrailing<NamedExpressionField>> "}" <h:@R> if Kind != "PreBlock" =>
+        PConstructorArguments::Named(Span(file, l, h), fs),
     <l:@L> "(" <f:CommaTrailing<Expression>> ")" <h:@R> =>
         PConstructorArguments::Positional(Span(file, l, h), f),
     <l:@L> () <h:@R> =>
         PConstructorArguments::Empty(Span(file, l, h)),
-};
-
-NamedExpressionFields: PConstructorArguments = {
-    <l:@L> "{" <fs:CommaTrailing<NamedExpressionField>> "}" <h:@R> =>
-        PConstructorArguments::Named(Span(file, l, h), fs),
 };
 
 NamedExpressionField: (Span, Id<str>, Id<PExpression>) = {

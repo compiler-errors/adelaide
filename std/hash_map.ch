@@ -124,54 +124,27 @@ impl<K, V> Iterable for HashMap<K, V> {
   type Item = (K, V).
 
   fn iterator(self) -> HashMapIterator<K, V> = {
-    let (next_bucket, buckets) = self:buckets:iterator():next().
-
-    HashMapIterator {
-      size_hint: self:size,
-      buckets,
-      links: next_bucket:unwrap():entries:iterator()
-    }
+    HashMapIterator((gen {
+      for b in self:buckets {
+        for (_, k, v) in b:entries {
+          yield (k, v).
+        }
+      }
+    }):iterator())
   }.
 }
 
-struct HashMapIterator<K, V> {
-    size_hint: Int,
-    buckets: ArrayIterator<Bucket<K, V>>,
-    links: ListIterator<(Int, K, V)>,
-}
+struct HashMapIterator<K, V>(GeneratorIterator<(K, V)>).
 
 impl<K, V> Iterator for HashMapIterator<K, V> {
   type Item = (K, V).
 
   fn next(self) -> (Option<(K, V)>, HashMapIterator<K, V>) = {
-    let HashMapIterator { size_hint, buckets, links } = self.
-
-    if let (Some((_, k, v)), links) = links:next() {
-      return (Some((k, v)), HashMapIterator { size_hint: size_hint - 1, buckets, links }).
-    }
-
-    let ArrayIterator { idx: buckets_idx, ... } = buckets.
-
-    // TODO: while let
-    while let (Some(next_bucket), next_buckets) = buckets:next() {
-      buckets = next_buckets. // We can't overwrite in a destructure.
-
-      if next_bucket:entries:len() > 0 {
-        let (next_link, links) = next_bucket:entries:iterator():next().
-        let (_, k, v) = next_link:unwrap().
-
-        return (Some((k, v)), HashMapIterator { size_hint: size_hint - 1, buckets, links }).
-      }
-    }
-
-    assert size_hint == 0.
-    (None, HashMapIterator { size_hint, buckets, links })
+    let (next, it) = self:0:next().
+    (next, HashMapIterator(it))
   }.
 
-  fn size_hint(self) -> Int = {
-    let HashMapIterator { size_hint, ... } = self.
-    size_hint
-  }.
+  fn size_hint(self) -> Int = 0.
 }
 
 impl<K, V> FromIterator<(K, V)> for HashMap<K, V> where K: Equals<K> + Hash {

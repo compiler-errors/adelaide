@@ -326,19 +326,24 @@ impl<'a> Translator<'_, 'a> {
         vcx: &LVariableContext,
         slots: &HashMap<VariableId, CStackId>,
     ) -> (HashMap<VariableId, CStackId>, CCaptures<'a>) {
-        (
-            vcx.variables
-                .keys()
-                .enumerate()
-                .map(|(idx, id)| (*id, CStackId(idx)))
-                .collect(),
-            CCaptures(
-                self.alloc.alloc_slice_fill_iter(
-                    vcx.captures
-                        .iter()
-                        .map(|(new_id, old_variable)| ((slots[&old_variable.id], slots[&new_id]))),
-                ),
+        let new_slots: HashMap<_, _> = vcx.variables
+        .keys()
+        .enumerate()
+        .map(|(idx, id)| (*id, CStackId(idx)))
+        .collect();
+
+        let captures = CCaptures(
+            self.alloc.alloc_slice_fill_iter(
+                vcx.captures
+                    .iter()
+                    .map(|(new_id, old_variable)| ((slots[&old_variable.id], new_slots[&new_id]))),
             ),
+        );
+
+        (
+            new_slots,
+            captures
+            ,
         )
     }
 

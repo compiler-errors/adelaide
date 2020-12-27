@@ -287,6 +287,8 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
             .map(|(g, t)| (g.id, self.into_ttype(*t)))
             .collect();
 
+            debug!("Translating an impl method {:?}, subs = {:?}", Pretty(name, self.ctx), Pretty(&substitutions, self.ctx));
+
             let slots: HashMap<_, _> = method_info
                 .vcx
                 .variables

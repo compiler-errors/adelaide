@@ -95,6 +95,7 @@ impl Typechecker<'_> {
                         Pretty(g.id, self.ctx),
                         Pretty(substitutions, self.ctx)
                     );
+                    assert!(self.global_substitutions.is_none());
                     TType::Skolem(*g).intern(self.ctx)
                 },
             LTypeData::Int => self.ctx.static_ty(&TType::Int),
@@ -505,8 +506,8 @@ impl Typechecker<'_> {
             | TType::Bool
             | TType::String
             | TType::Never => ty,
-            TType::Skolem(_) | TType::MethodSkolem(..) => {
-                assert!(self.global_substitutions.is_none());
+            TType::Skolem(g) | TType::MethodSkolem(_, g) => {
+                assert!(self.global_substitutions.is_none(), "We let {:?} leak", Pretty(g, self.ctx));
                 ty
             },
             // Attempt to deref an infer (TODO: loop detection)

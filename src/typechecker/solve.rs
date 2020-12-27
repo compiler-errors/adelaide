@@ -14,11 +14,7 @@ use crate::{
     util::{AError, AResult, Id, Intern, Pretty, PrettyPrint, TryCollectBTreeMap, ZipExact},
 };
 
-use super::{
-    item::TRestriction,
-    ty::{TTraitTypeWithBindings, UnifyMode},
-    TEpoch, TGoal, TTraitType, TType, Typechecker,
-};
+use super::{TEpoch, TGoal, TTraitType, TType, Typechecker, item::TRestriction, ty::{TTraitTypeWithBindings, UnifyMode}};
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum TImplWitness {
@@ -546,6 +542,10 @@ impl Typechecker<'_> {
             )?;
         } else {
             assert!(info.trait_ty.is_none());
+        }
+
+        if self.epochs.last().unwrap().ambiguity.is_some() {
+            return Ok(None);
         }
 
         // Satisfy the restrictions of the impl, of course.

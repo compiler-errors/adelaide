@@ -6,7 +6,7 @@ use crate::{
         GenericId, LEnum, LFunction, LGlobal, LImpl, LModule, LObject, LTrait, LTraitType,
         LTraitTypeWithBindings, LType, LTypeData, LVariableContext,
     },
-    util::{AResult, Id, Intern, TryCollectVec, ZipExact},
+    util::{AResult, Id, Intern, TryCollectVec, ZipExact, Pretty},
 };
 
 use super::{
@@ -325,6 +325,8 @@ impl Typechecker<'_> {
             .map(|t| self.satisfy_trait_ty(t))
             .transpose()?;
 
+            debug!("Instantiated self_ty = {:?}, trait_ty = {:?}", Pretty(self_ty, self.ctx), Pretty(trait_ty, self.ctx));
+
         let method_info = &info.methods[&name];
 
         // Also satisfies all the parameters
@@ -355,7 +357,7 @@ impl Typechecker<'_> {
             let fn_generics: Vec<_> = method_info
                 .generics
                 .iter()
-                .map(|g| TType::Skolem(*g).intern(self.ctx))
+                .map(|g| self.global_substitutions.as_ref().unwrap()[&g.id])
                 .collect();
 
             let (expected_param_tys, expected_return_ty, restrictions) = self

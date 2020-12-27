@@ -46,9 +46,12 @@ impl Typechecker<'_> {
     ) -> AResult<(Vec<Id<TType>>, Id<TType>, Vec<TRestriction>)> {
         let info = tr.lookup(self.ctx);
         debug!(
-            "Instantiating {:?} in {:?}",
+            "Instantiating {:?} in {:?}, self = {:?}, tr_generics = {:?}, fn_generics = {:?}",
             Pretty(name, self.ctx),
-            Pretty(tr, self.ctx)
+            Pretty(tr, self.ctx),
+            Pretty(self_ty, self.ctx),
+            Pretty(tr_generics, self.ctx),
+            Pretty(fn_generics, self.ctx),
         );
         let method_info = &tr.lookup(self.ctx).methods[&name];
 

@@ -28,27 +28,39 @@ impl<It> Self for It where It: Iterator {
   fn enumerate(self) -> Enumerate<It> = Enumerate { idx: 0, iterator: self }.
   fn limit(self, limit: Int) -> Limit<It> = Limit { remaining: limit, iterator: self }.
   fn zip<It2>(self, other: It2) -> Zip<It, <It2 as Iterable>::Iterator> where It2: Iterable = Zip(self, other:iterator()).
-  fn flatten<OutIt>(self) -> Flatten<It, OutIt> where OutIt: Iterable = Flatten { iterator: self, sub_iterator: None }.
 
-  fn flat_map<F, OutIt>(self, fun: F) -> Flatten<Map<It, F>, OutIt> where
-      F: Fn(<Self as Iterator>::Item) -> OutIt, OutIt: Iterable
+  fn flatten(self) -> Flatten<<<It as Iterator>::Item as Iterable>::Item>
+      where <It as Iterator>::Item: Iterable =
+    Flatten((gen {
+      // Self is an iterator that yields iterables
+      for it in self {
+        // Take each sub-iterable and iterate over its items
+        for i in it {
+          // Yield that item
+          yield i.
+        }
+      }
+    }):iterator()).
+
+  fn flat_map<F, O>(self, fun: F) -> Flatten<<O as Iterable>::Item> where
+      F: Fn(<Self as Iterator>::Item) -> O, O: Iterable
     = self:map(fun):flatten().
 
   fn collect<C>(self) -> C where C: FromIterator<<Self as Iterator>::Item> = {
     C::from_iterator(self)
   }.
 
-  fn fold<F, I>(self, i: I, f: F) -> I where F: Fn(I, <Self as Iterator>::Item) -> I = {
+  fn fold<F, I>(self, i: I, f: F) -> I
+      where F: Fn(I, <Self as Iterator>::Item) -> I = {
     for j in self {
         i = f(i, j).
     }
 
     i
   }.
-}
 
-impl<T> Self for T where T: Iterator, <Self as Iterator>::Item: Default + Add<<Self as Iterator>::Item, Result=<Self as Iterator>::Item> {
-  fn sum(self) -> <Self as Iterator>::Item =
+  fn sum(self) -> <Self as Iterator>::Item
+      where <Self as Iterator>::Item: Default + Add<<Self as Iterator>::Item, Result=<Self as Iterator>::Item> =
     self:fold(
       <_>::default(),
       |a, b| a + b
@@ -162,38 +174,17 @@ impl<I1, I2> Iterator for Zip<I1, I2> where I1: Iterator, I2:Iterator {
   }.
 }
 
-struct Flatten<It, OutIt> where OutIt: Iterable {
-  iterator: It,
-  sub_iterator: Option<<OutIt as Iterable>::Iterator>,
-}
+struct Flatten<I>(GeneratorIterator<I>).
 
-impl<It, OutIt> Iterator for Flatten<It, OutIt> where It: Iterator<Item=OutIt>, OutIt: Iterable {
-  type Item = <OutIt as Iterable>::Item.
+impl<I> Iterator for Flatten<I> {
+  type Item = I.
 
-  fn next(self) -> (Option<<Self as Iterator>::Item>, Self) = {
-    let Flatten { iterator, sub_iterator } = self.
-
-    if let Some(sub_iterator) = sub_iterator {
-      if let (Some(sub_item), sub_iterator) = sub_iterator:next() {
-        return (Some(sub_item), Flatten { iterator, sub_iterator: Some(sub_iterator) }).
-      }
-    }
-
-    while let (Some(item), new_iterator) = iterator:next() {
-      iterator = new_iterator.
-      let sub_iterator = item:iterator().
-
-      if let (Some(sub_item), sub_iterator) = sub_iterator:next() {
-        return (Some(sub_item), Flatten { iterator, sub_iterator: Some(sub_iterator) }).
-      }
-    }
-
-    (None, Flatten { iterator, sub_iterator: None })
+  fn next(self) -> (Option<I>, Self) = {
+    let (item, next_it) = self:0:next().
+    (item, Flatten(next_it))
   }.
 
-  fn size_hint(self) -> Int = {
-    self:iterator:size_hint()
-  }.
+  fn size_hint(self) -> Int = 0.
 }
 
 impl<T> Iterable for [T] {
@@ -330,7 +321,7 @@ impl<T> Iterator for OptionIterator<T> {
 
 struct Repeat<T>(T, Int).
 
-fn repeat<T>(t: T, times: Int) -> Repeat<T> = {
+fn repeated<T>(t: T, times: Int) -> Repeat<T> = {
   Repeat(t, times)
 }.
 

@@ -62,7 +62,7 @@ impl<T> Self for Vector<T> {
 
     let new_size = self:array:len().
     while new_size < n {
-      new_size = new_size * 2.
+      new_size = new_size * 2 + 1.
     }
 
     self:array = copy_array_with_size(self:array, new_size).
