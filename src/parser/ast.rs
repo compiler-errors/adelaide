@@ -650,6 +650,7 @@ pub enum PExpressionData {
     Block(Vec<Id<PStatement>>, Id<PExpression>),
     AsyncBlock(Id<PExpression>),
     GeneratorBlock(
+        bool,
         Option<(Span, Id<str>, Id<PType>)>,
         Id<PType>,
         Id<PType>,
@@ -753,6 +754,7 @@ impl PExpression {
 
     pub fn generator_block(
         span: Span,
+        is_async: bool,
         in_param: Option<(Span, Id<str>, Id<PType>)>,
         return_ty: Id<PType>,
         yield_ty: Id<PType>,
@@ -760,7 +762,7 @@ impl PExpression {
     ) -> PExpression {
         PExpression {
             span,
-            data: PExpressionData::GeneratorBlock(in_param, return_ty, yield_ty, expr),
+            data: PExpressionData::GeneratorBlock(is_async, in_param, return_ty, yield_ty, expr),
         }
     }
 

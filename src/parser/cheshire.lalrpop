@@ -531,8 +531,8 @@ AsyncBlockExpression: Id<PExpression> = {
 };
 
 GeneratorBlockExpression: Id<PExpression> = {
-    <l:@L> "gen" <p:MaybeDeclParam> <r:MaybeReturn> <y:MaybeYields> <b:Block> <h:@R> =>
-        PExpression::generator_block(Span(file, l, h), p, r, y, b).intern(ctx),
+    <l:@L> <a:"async"?> "gen" <p:MaybeDeclParam> <r:MaybeReturn> <y:MaybeYields> <b:Block> <h:@R> =>
+        PExpression::generator_block(Span(file, l, h), a.is_some(), p, r, y, b).intern(ctx),
 };
 
 MaybeDeclParam: Option<(Span, Id<str>, Id<PType>)> = {

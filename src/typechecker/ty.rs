@@ -507,7 +507,11 @@ impl Typechecker<'_> {
             | TType::String
             | TType::Never => ty,
             TType::Skolem(g) | TType::MethodSkolem(_, g) => {
-                assert!(self.global_substitutions.is_none(), "We let {:?} leak", Pretty(g, self.ctx));
+                assert!(
+                    self.global_substitutions.is_none(),
+                    "We let {:?} leak",
+                    Pretty(g, self.ctx)
+                );
                 ty
             },
             // Attempt to deref an infer (TODO: loop detection)

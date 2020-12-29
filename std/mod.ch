@@ -5,6 +5,7 @@ use option::{*, Option::{None, Some}}.
 use vector::*.
 use list::*.
 use hash_map::*.
+use stream::*.
 use threading::*.
 use timer::*.
 

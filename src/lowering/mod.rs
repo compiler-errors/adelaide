@@ -357,7 +357,8 @@ enum ScopeKind {
     Async,
     /// `return` and `yield` allowed
     Generator,
-    // AsyncGenerator,
+    // `return`, `:await`, and `yield` are allowed
+    AsyncGenerator,
 }
 
 #[derive(Debug, Hash, Eq, PartialEq, PrettyPrint)]

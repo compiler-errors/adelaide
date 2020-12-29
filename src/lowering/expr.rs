@@ -772,14 +772,37 @@ impl LoweringContext<'_> {
                 },
             },
             PExpressionData::Return(v) => match self.scopes.last_mut().unwrap().kind {
-                ScopeKind::Returnable | ScopeKind::Async | ScopeKind::Generator =>
-                    LExpressionData::Return(self.lower_expr(*v)?),
+                ScopeKind::Returnable
+                | ScopeKind::Async
+                | ScopeKind::Generator
+                | ScopeKind::AsyncGenerator => LExpressionData::Return(self.lower_expr(*v)?),
                 ScopeKind::None => {
                     return Err(AError::IllegalReturn { span: *span });
                 },
             },
             PExpressionData::Yield(v) => match self.scopes.last_mut().unwrap().kind {
                 ScopeKind::Generator => LExpressionData::Yield(self.lower_expr(*v)?),
+                // lower `yield i` => `yield AsyncGeneratorState:<_>::Yield(i)`
+                ScopeKind::AsyncGenerator =>
+                    if let LScopeItem::Enum(async_generator_state_enum) =
+                        self.ctx.std_item("AsyncGeneratorState")
+                    {
+                        LExpressionData::Yield(
+                            LExpression {
+                                source: e,
+                                span: *span,
+                                data: LExpressionData::EnumConstructor(
+                                    async_generator_state_enum.into(),
+                                    vec![self.fresh_infer_ty(*span)],
+                                    self.ctx.static_name("Yield"),
+                                    vec![(0, self.lower_expr(*v)?)],
+                                ),
+                            }
+                            .intern(self.ctx),
+                        )
+                    } else {
+                        unreachable!()
+                    },
                 ScopeKind::None | ScopeKind::Returnable | ScopeKind::Async => {
                     return Err(AError::IllegalReturn { span: *span });
                 },
@@ -825,8 +848,12 @@ impl LoweringContext<'_> {
 
                 LExpressionData::Closure(vcx, ps, r, e)
             },
-            PExpressionData::GeneratorBlock(p, r, y, e) => {
-                self.enter_context(ScopeKind::Generator);
+            PExpressionData::GeneratorBlock(a, p, r, y, e) => {
+                if *a {
+                    self.enter_context(ScopeKind::AsyncGenerator);
+                } else {
+                    self.enter_context(ScopeKind::Generator);
+                }
 
                 let p = p
                     .map(|(s, n, t)| -> AResult<_> {
@@ -836,7 +863,26 @@ impl LoweringContext<'_> {
                     .transpose()?;
                 let e = self.lower_expr(*e)?;
                 let r = self.lower_ty(*r, true, true)?;
-                let y = self.lower_ty(*y, true, true)?;
+
+                // Lower yield type to `AsyncGeneratorState<$YIELD_TYPE>` if this is an
+                // async-generator
+                let y = if *a {
+                    if let LScopeItem::Enum(async_generator_state_enum) =
+                        self.ctx.std_item("AsyncGeneratorState")
+                    {
+                        LType {
+                            span: y.lookup(self.ctx).span,
+                            data: LTypeData::Enum(async_generator_state_enum.into(), vec![
+                                self.lower_ty(*y, true, true)?
+                            ]),
+                        }
+                        .intern(self.ctx)
+                    } else {
+                        unreachable!()
+                    }
+                } else {
+                    self.lower_ty(*y, true, true)?
+                };
 
                 let vcx = self.exit_context();
 
@@ -874,7 +920,49 @@ impl LoweringContext<'_> {
                 )
             },
             PExpressionData::Await(a) => match self.scopes.last().unwrap().kind {
-                ScopeKind::Async => self.lower_expr_await(e, *span, *a)?,
+                ScopeKind::Async => {
+                    let await_incomplete_value =
+                        if let LScopeItem::Object(await_incomplete_struct) =
+                            self.ctx.std_item("AwaitIncomplete")
+                        {
+                            LExpression {
+                                source: e,
+                                span: *span,
+                                data: LExpressionData::StructConstructor(
+                                    await_incomplete_struct.into(),
+                                    vec![],
+                                    vec![],
+                                ),
+                            }
+                            .intern(self.ctx)
+                        } else {
+                            unreachable!()
+                        };
+
+                    self.lower_expr_await(e, *span, *a, await_incomplete_value)?
+                },
+                ScopeKind::AsyncGenerator => {
+                    let await_incomplete_value =
+                        if let LScopeItem::Enum(async_generator_state_enum) =
+                            self.ctx.std_item("AsyncGeneratorState")
+                        {
+                            LExpression {
+                                source: e,
+                                span: *span,
+                                data: LExpressionData::EnumConstructor(
+                                    async_generator_state_enum.into(),
+                                    vec![self.fresh_infer_ty(*span)],
+                                    self.ctx.static_name("Incomplete"),
+                                    vec![],
+                                ),
+                            }
+                            .intern(self.ctx)
+                        } else {
+                            unreachable!()
+                        };
+
+                    self.lower_expr_await(e, *span, *a, await_incomplete_value)?
+                },
                 ScopeKind::None | ScopeKind::Returnable | ScopeKind::Generator => {
                     return Err(AError::IllegalAwait { span: *span });
                 },
@@ -970,6 +1058,7 @@ impl LoweringContext<'_> {
         source: Id<PExpression>,
         span: Span,
         value: Id<PExpression>,
+        incomplete_value: Id<LExpression>,
     ) -> AResult<LExpressionData> {
         /*
         {
@@ -1124,14 +1213,6 @@ impl LoweringContext<'_> {
         }
         .intern(self.ctx);
 
-        let await_incomplete_struct = if let LScopeItem::Object(awaitable_incomplete_struct) =
-            self.ctx.std_item("AwaitIncomplete")
-        {
-            awaitable_incomplete_struct
-        } else {
-            unreachable!()
-        };
-
         let incomplete_expr = LExpression {
             source,
             span,
@@ -1170,18 +1251,7 @@ impl LoweringContext<'_> {
                             LExpression {
                                 source,
                                 span,
-                                data: LExpressionData::Yield(
-                                    LExpression {
-                                        source,
-                                        span,
-                                        data: LExpressionData::StructConstructor(
-                                            await_incomplete_struct.into(),
-                                            vec![],
-                                            vec![],
-                                        ),
-                                    }
-                                    .intern(self.ctx),
-                                ),
+                                data: LExpressionData::Yield(incomplete_value),
                             }
                             .intern(self.ctx),
                         ),
@@ -1537,7 +1607,10 @@ impl LoweringContext<'_> {
         .intern(self.ctx);
 
         match self.scopes.last_mut().unwrap().kind {
-            ScopeKind::Returnable | ScopeKind::Async | ScopeKind::Generator => { /* allowed */ },
+            ScopeKind::Returnable
+            | ScopeKind::Async
+            | ScopeKind::Generator
+            | ScopeKind::AsyncGenerator => { /* allowed */ },
             ScopeKind::None => {
                 return Err(AError::IllegalReturn { span });
             },
