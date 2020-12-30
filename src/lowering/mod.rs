@@ -984,6 +984,19 @@ pub fn lower_into_item(ctx: &dyn AdelaideContext) -> AResult<Id<LTrait>> {
     }
 }
 
+pub fn lower_exit_value_item(ctx: &dyn AdelaideContext) -> AResult<Id<LTrait>> {
+    if let LScopeItem::Trait(e) = ctx
+        .mod_items(ctx.parse_std()?)?
+        .get(&ctx.static_name("ExitValue"))
+        .unwrap()
+    {
+        let lowered_e: LId<LTrait> = (*e).into();
+        Ok(lowered_e.get(ctx))
+    } else {
+        unreachable!()
+    }
+}
+
 static IDS: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Debug, PrettyPrint)]

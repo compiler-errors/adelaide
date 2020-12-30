@@ -5,11 +5,11 @@ extern fn internal_thread_switch().
 extern fn internal_thread_complete(t: Thread) -> Bool.
 extern fn internal_thread_block_on(id: Int).
 
-object Thread {
+opaque object Thread {
   id: Int,
 }
 
-object ThreadHandle<T> {
+opaque object ThreadHandle<T> {
   // We store this in a single tuple because we need
   // to make sure we can index the Option<T> return
   // value stably, which might vary depending on how

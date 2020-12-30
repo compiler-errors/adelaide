@@ -13,7 +13,7 @@ enum YieldState<Y, F> {
     Complete(F),
 }
 
-object Generator<I, Y, F>.
+opaque object Generator<I, Y, F>.
 
 impl<I, Y, F> Yield for Generator<I, Y, F> {
     type In = I.

@@ -1,5 +1,6 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
+    iter::once,
     time::Instant,
 };
 
@@ -9,7 +10,7 @@ use crate::{
     util::Id,
 };
 
-use super::thread::{fresh_thread_id, Control, Thread, ThreadId};
+use super::thread::{fresh_thread_id, Control, State, Thread, ThreadId};
 
 pub struct Heap<'a> {
     pub globals: HashMap<Id<LGlobal>, Value<'a>>,
@@ -239,6 +240,146 @@ impl<'a> Heap<'a> {
 
         false
     }
+
+    pub fn gc(&mut self, thread: &Thread<'a>) {
+        let mut mark = GcMark {
+            objects: hashset! {},
+            generators: hashset! {},
+            dyn_boxes: hashset! {},
+        };
+
+        // Mark all threads
+        for t in self
+            .blocked_threads
+            .values()
+            .chain(self.ready_threads.values())
+            .chain(once(thread))
+        {
+            self.mark_thread(t, &mut mark)
+        }
+
+        // Mark all globals
+        for g in self.globals.values() {
+            self.mark_value(g, &mut mark)
+        }
+
+        self.objects.retain(|id, _| mark.objects.contains(id));
+        self.generators.retain(|id, _| mark.generators.contains(id));
+        self.dyn_boxes.retain(|id, _| mark.dyn_boxes.contains(id));
+    }
+
+    pub fn mark_thread(&self, thread: &Thread<'a>, mark: &mut GcMark) {
+        for c in thread.control.iter() {
+            self.mark_control(c, mark)
+        }
+
+        for v in thread.slots.iter().flat_map(|v| v.iter()) {
+            self.mark_value(v, mark)
+        }
+
+        self.mark_value(&thread.handle, mark);
+    }
+
+    pub fn mark_control(&self, control: &Control<'a>, mark: &mut GcMark) {
+        match control {
+            Control::Parked(s) => {
+                self.mark_state(s, mark);
+            },
+            Control::GeneratorScope(v)
+            | Control::Apply { rval: v, .. }
+            | Control::ApplyObject { rval: v, .. } => {
+                self.mark_value(v, mark);
+            },
+            Control::Invoke(_, _, values)
+            | Control::Struct(_, values, _)
+            | Control::Object(_, values, _)
+            | Control::Variant(_, _, values, _) =>
+                for v in values {
+                    self.mark_value(v, mark);
+                },
+            Control::FirstResume(_, _)
+            | Control::Scope
+            | Control::Block(_, _)
+            | Control::StructAccess(_)
+            | Control::ObjectAccess(_)
+            | Control::Or(_)
+            | Control::And(_)
+            | Control::If(_, _)
+            | Control::Return
+            | Control::Yield
+            | Control::Break(_)
+            | Control::Loop(_, _)
+            | Control::Match(_)
+            | Control::InfallibleApply(_)
+            | Control::ApplyTo(_) => {
+                // Do nothing
+            },
+        }
+    }
+
+    pub fn mark_state(&self, state: &State<'a>, mark: &mut GcMark) {
+        match state {
+            State::Value(v) => {
+                self.mark_value(v, mark);
+            },
+            State::Expression(_) | State::LvalExpression(_) | State::Statement(_) => {
+                // Do nothing
+            },
+        }
+    }
+
+    pub fn mark_value(&self, value: &Value<'a>, mark: &mut GcMark) {
+        match value {
+            Value::Struct(values) | Value::Variant(_, values) =>
+                for v in values {
+                    self.mark_value(v, mark);
+                },
+            Value::Callable(values, _) =>
+                for (_, v) in values {
+                    self.mark_value(v, mark);
+                },
+            Value::Object(id, _, _) =>
+                if mark.objects.insert(*id) {
+                    for v in &self.objects[id] {
+                        self.mark_value(v, mark);
+                    }
+                },
+            Value::Generator(id) => {
+                if mark.generators.insert(*id) {
+                    match &self.generators[id] {
+                        Generator::Incomplete { stack_rev, slots } => {
+                            for v in slots {
+                                self.mark_value(v, mark);
+                            }
+
+                            for s in stack_rev {
+                                self.mark_control(s, mark);
+                            }
+                        },
+                        Generator::Complete(v) => {
+                            self.mark_value(v, mark);
+                        },
+                        Generator::Evaluating => {
+                            // Do nothing
+                        },
+                    }
+                }
+            },
+            Value::Dyn(id) =>
+                if mark.dyn_boxes.insert(*id) {
+                    self.mark_value(&self.dyn_boxes[id].0, mark);
+                },
+            Value::Undefined | Value::Int(_) | Value::Float(_) | Value::String(_) => {
+                // Do nothing
+            },
+        }
+    }
+}
+
+pub struct GcMark {
+    pub objects: HashSet<ObjectId>,
+    pub generators: HashSet<GeneratorId>,
+    pub dyn_boxes: HashSet<DynId>,
 }
 
 #[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Debug)]

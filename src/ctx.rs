@@ -221,6 +221,9 @@ pub trait AdelaideContext: salsa::Database {
     #[salsa::invoke(crate::lowering::lower_into_item)]
     fn lower_into_item(&self) -> AResult<Id<LTrait>>;
 
+    #[salsa::invoke(crate::lowering::lower_exit_value_item)]
+    fn lower_exit_value_item(&self) -> AResult<Id<LTrait>>;
+
     // ------ TYPECHECKING ------ //
 
     #[salsa::interned]

@@ -16,12 +16,11 @@ pub type AResult<T> = std::result::Result<T, AError>;
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Diagnostic, PrettyPrint)]
 pub enum AError {
-    #[message = "This should never happen"]
+    /*#[message = "This should never happen"]
     Oof {
         #[span]
         span: Span,
-    },
-
+    },*/
     #[message = "IO Error while reading {child_path}"]
     #[note = "{io_error}"]
     IOErrorInArgumentPath {
@@ -301,6 +300,15 @@ pub enum AError {
         use_span: Span,
     },
 
+    #[message = "Attempted to construct an opaque object/struct"]
+    TriedConstructingOpaque {
+        parent_name: Id<str>,
+        #[span = "Object/struct defined as opaque here"]
+        opaque_span: Span,
+        #[span]
+        use_span: Span,
+    },
+
     #[message = "Attempted to destructure an object, when it must be a struct"]
     TriedDestructuringObject {
         parent_name: Id<str>,
@@ -506,6 +514,9 @@ pub enum AError {
 
     #[message = "No `main` function declared in this program, expected one"]
     MissingMain,
+
+    #[message = "This expression is not an lvalue, cannot be the left side of an assignment"]
+    NotAnLValue { span: Span },
 }
 
 pub trait IntoDiagnostic {

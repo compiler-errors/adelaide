@@ -76,6 +76,7 @@ extern {
         "assert" => Token::Assert,
         "true" => Token::True,
         "false" => Token::False,
+        "opaque" => Token::Opaque,
         "object" => Token::Object,
         "struct" => Token::Struct,
         "type" => Token::Type,
@@ -234,10 +235,15 @@ MaybeRestrictions: Vec<(Id<PType>, Vec<Id<PTraitTypeWithBindings>>)> = {
 // --- Object --- //
 
 Object: Id<PObject> = {
-    "object" <l:@L> <t:TypeName> <h:@R> <g:MaybeDeclGenerics> <r:MaybeRestrictions> <o:ObjectMembers> =>
-        PObject::new(false, Span(file, l, h), file.into(), t, g, r, o).intern(ctx),
-    "struct" <l:@L> <t:TypeName> <h:@R> <g:MaybeDeclGenerics> <r:MaybeRestrictions> <o:ObjectMembers> =>
-        PObject::new(true, Span(file, l, h), file.into(), t, g, r, o).intern(ctx),
+    <q:MaybeOpaque> "object" <l:@L> <t:TypeName> <h:@R> <g:MaybeDeclGenerics> <r:MaybeRestrictions> <o:ObjectMembers> =>
+        PObject::new(false, q, Span(file, l, h), file.into(), t, g, r, o).intern(ctx),
+    <q:MaybeOpaque> "struct" <l:@L> <t:TypeName> <h:@R> <g:MaybeDeclGenerics> <r:MaybeRestrictions> <o:ObjectMembers> =>
+        PObject::new(true, q, Span(file, l, h), file.into(), t, g, r, o).intern(ctx),
+};
+
+MaybeOpaque: Option<Span> = {
+    <l:@L> "opaque" <h:@R> => Some(Span(file, l, h)),
+    () => None,
 };
 
 ObjectMembers: PObjectMembers = {

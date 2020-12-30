@@ -266,12 +266,13 @@ fn unreachable<'a>(
 
 fn gc<'a>(
     _: &Interpreter<'a>,
-    _: &mut Heap<'a>,
-    _: &mut Thread<'a>,
+    heap: &mut Heap<'a>,
+    thread: &mut Thread<'a>,
     _: &'a [CType<'a>],
     _: Vec<Value<'a>>,
 ) -> IResult<State<'a>> {
-    todo!()
+    heap.gc(thread);
+    Ok(State::Value(Value::Struct(vec![])))
 }
 
 fn alloc_empty_array<'a>(

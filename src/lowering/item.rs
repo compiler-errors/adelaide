@@ -161,6 +161,7 @@ impl LoweringContext<'_> {
         let PObject {
             parent: _,
             is_structural,
+            is_opaque: _,
             span,
             name,
             generics,

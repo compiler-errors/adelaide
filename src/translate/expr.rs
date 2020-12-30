@@ -1,12 +1,13 @@
 use std::collections::HashMap;
 
 use crate::{
+    lexer::Span,
     lowering::{
         LExpression, LExpressionData, LGlobal, LLiteral, LMembers, LStatement, LStatementData,
         LVariableContext, LoopId, VariableId,
     },
     typechecker::{TType, Typechecker},
-    util::{AResult, Id, TryCollectVec},
+    util::{AError, AResult, Id, TryCollectVec},
 };
 
 use super::{pattern::CPattern, CFunction, CFunctionId, Translator};
@@ -194,8 +195,9 @@ impl<'a> Translator<'_, 'a> {
                 )
             },
             LExpressionData::Assign(left, right) => {
+                let left_span = left.lookup(self.ctx).span;
                 let left = self.translate_sub_expr(*left, tyck, slots)?;
-                self.check_lval(*left)?;
+                self.check_lval(*left, left_span)?;
 
                 CExpression::Assign(left, self.translate_sub_expr(*right, tyck, slots)?)
             },
@@ -326,11 +328,12 @@ impl<'a> Translator<'_, 'a> {
         vcx: &LVariableContext,
         slots: &HashMap<VariableId, CStackId>,
     ) -> (HashMap<VariableId, CStackId>, CCaptures<'a>) {
-        let new_slots: HashMap<_, _> = vcx.variables
-        .keys()
-        .enumerate()
-        .map(|(idx, id)| (*id, CStackId(idx)))
-        .collect();
+        let new_slots: HashMap<_, _> = vcx
+            .variables
+            .keys()
+            .enumerate()
+            .map(|(idx, id)| (*id, CStackId(idx)))
+            .collect();
 
         let captures = CCaptures(
             self.alloc.alloc_slice_fill_iter(
@@ -340,11 +343,7 @@ impl<'a> Translator<'_, 'a> {
             ),
         );
 
-        (
-            new_slots,
-            captures
-            ,
-        )
+        (new_slots, captures)
     }
 
     pub fn translate_sub_expr(
@@ -404,13 +403,13 @@ impl<'a> Translator<'_, 'a> {
         Ok(self.alloc.alloc_slice_copy(&stmts))
     }
 
-    pub fn check_lval(&self, expr: CExpression<'a>) -> AResult<()> {
+    pub fn check_lval(&self, expr: CExpression<'a>, span: Span) -> AResult<()> {
         match expr {
             CExpression::Variable(_)
             | CExpression::GlobalFunction(_)
             | CExpression::ObjectAccess(..) => Ok(()),
-            CExpression::StructAccess(left, _) => self.check_lval(*left),
-            _ => todo!("Die: Not an lval"),
+            CExpression::StructAccess(left, _) => self.check_lval(*left, span),
+            _ => Err(AError::NotAnLValue { span }),
         }
     }
 }

@@ -651,6 +651,7 @@ impl<'input> Lexer<'input> {
             "true" => Token::True,
             "false" => Token::False,
 
+            "opaque" => Token::Opaque,
             "object" => Token::Object,
             "struct" => Token::Struct,
             "type" => Token::Type,

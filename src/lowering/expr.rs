@@ -663,10 +663,19 @@ impl LoweringContext<'_> {
             PExpressionData::StructuralAmbiguous(p, g, a) => match self.lookup_path(p)? {
                 LScopeItem::Object(o) => {
                     let info = o.lookup(self.ctx);
+
                     if !info.is_structural {
                         return Err(AError::TriedConstructingObject {
                             parent_name: info.name,
                             parent_span: info.span,
+                            use_span: *span,
+                        });
+                    }
+
+                    if let Some(opaque_span) = info.is_opaque {
+                        return Err(AError::TriedConstructingOpaque {
+                            parent_name: info.name,
+                            opaque_span,
                             use_span: *span,
                         });
                     }
@@ -733,20 +742,20 @@ impl LoweringContext<'_> {
             },
             PExpressionData::Allocate(p, g, a) => match self.lookup_path(p)? {
                 LScopeItem::Object(o) => {
-                    if LScopeItem::Object(o) == self.ctx.std_item("AsyncBlock") {
-                        return Err(AError::CannotConstruct {
-                            kind: "object",
-                            name: self.ctx.static_name("AsyncBlock"),
-                            use_span: *span,
-                            def_span: o.lookup(self.ctx).span,
-                        });
-                    }
-
                     let info = o.lookup(self.ctx);
+
                     if info.is_structural {
                         return Err(AError::TriedAllocatingStruct {
                             parent_name: info.name,
                             parent_span: info.span,
+                            use_span: *span,
+                        });
+                    }
+
+                    if let Some(opaque_span) = info.is_opaque {
+                        return Err(AError::TriedConstructingOpaque {
+                            parent_name: info.name,
+                            opaque_span,
                             use_span: *span,
                         });
                     }

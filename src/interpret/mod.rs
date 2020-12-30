@@ -14,7 +14,7 @@ use crate::{
         CExpression, CFunction, CLiteral, CPattern, CProgram, CStackId, CStatement, Translator,
     },
     typechecker::{typecheck_program, Typechecker},
-    util::{AError, AResult, ZipExact},
+    util::{AResult, Id, ZipExact},
 };
 
 use self::{
@@ -32,7 +32,7 @@ pub fn interpret_program(ctx: &dyn AdelaideContext) -> AResult<()> {
 
     match (Interpreter { program }.run()) {
         Ok(()) | Err(IError::Exit) => Ok(()),
-        Err(IError::Oof(span)) => Err(AError::Oof { span }),
+        //Err(IError::Oof(span)) => Err(AError::Oof { span }),
         Err(_) => todo!(),
     }
 }
@@ -46,11 +46,12 @@ type IResult<T> = Result<T, IError>;
 pub enum IError {
     Exit,
     Panic,
+    GlobalYielded(Id<str>, Span),
     Deadlock,
     DoubleResume,
-    ResumeAfterComplete,
+    //ResumeAfterComplete,
     NoPattern,
-    Oof(Span),
+    //Oof(Span),
 }
 
 impl<'a> Interpreter<'a> {
@@ -80,18 +81,19 @@ impl<'a> Interpreter<'a> {
                     heap.globals.insert(*id, e);
                 },
                 ThreadState::Incomplete => {
-                    todo!("Die")
+                    return Err(IError::GlobalYielded(global.name_id, global.span));
                 },
             }
         }
 
         debug!("Done evaluating globals");
 
-        let main_fn = self.program.functions[&self.program.main];
-        // Set up the main thread to be executing a single call to main.
-        // Park the state right after the fn call has initiated.
-        let state = self.do_call(&mut heap, &mut main_thread, main_fn, vec![], vec![])?;
-        main_thread.control.push(Control::Parked(state));
+        // Set up the main thread
+        main_thread.slots.push(vec![]);
+        main_thread.control.push(Control::Scope);
+        main_thread
+            .control
+            .push(Control::Parked(State::Expression(self.program.pre_main)));
 
         let mut current_thread = main_thread;
         loop {

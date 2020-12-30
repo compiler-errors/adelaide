@@ -193,6 +193,7 @@ impl PFunction {
 pub struct PObject {
     pub parent: LId<PModule>,
     pub is_structural: bool,
+    pub is_opaque: Option<Span>,
     pub span: Span,
     pub name: Id<str>,
     pub generics: Vec<(Span, Id<str>)>,
@@ -203,6 +204,7 @@ pub struct PObject {
 impl PObject {
     pub fn new(
         is_structural: bool,
+        is_opaque: Option<Span>,
         span: Span,
         parent: LId<PModule>,
         name: Id<str>,
@@ -213,6 +215,7 @@ impl PObject {
         PObject {
             parent,
             is_structural,
+            is_opaque,
             span,
             name,
             generics,

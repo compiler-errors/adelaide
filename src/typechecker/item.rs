@@ -6,7 +6,7 @@ use crate::{
         GenericId, LEnum, LFunction, LGlobal, LImpl, LModule, LObject, LTrait, LTraitType,
         LTraitTypeWithBindings, LType, LTypeData, LVariableContext,
     },
-    util::{AResult, Id, Intern, TryCollectVec, ZipExact, Pretty},
+    util::{AResult, Id, Intern, Pretty, TryCollectVec, ZipExact},
 };
 
 use super::{
@@ -325,7 +325,11 @@ impl Typechecker<'_> {
             .map(|t| self.satisfy_trait_ty(t))
             .transpose()?;
 
-            debug!("Instantiated self_ty = {:?}, trait_ty = {:?}", Pretty(self_ty, self.ctx), Pretty(trait_ty, self.ctx));
+        debug!(
+            "Instantiated self_ty = {:?}, trait_ty = {:?}",
+            Pretty(self_ty, self.ctx),
+            Pretty(trait_ty, self.ctx)
+        );
 
         let method_info = &info.methods[&name];
 

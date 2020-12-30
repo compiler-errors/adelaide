@@ -9,12 +9,17 @@ use crate::{
     ctx::AdelaideContext,
     lexer::Span,
     lowering::{
-        fresh_id, GenericId, InferId, LExpression, LImpl, LMembers, LTrait, LType, LTypeData,
+        fresh_id, GenericId, InferId, LExpression, LFunction, LImpl, LMembers, LTrait, LType,
+        LTypeData,
     },
     util::{AError, AResult, Id, Intern, Pretty, PrettyPrint, TryCollectBTreeMap, ZipExact},
 };
 
-use super::{TEpoch, TGoal, TTraitType, TType, Typechecker, item::TRestriction, ty::{TTraitTypeWithBindings, UnifyMode}};
+use super::{
+    item::TRestriction,
+    ty::{TTraitTypeWithBindings, UnifyMode},
+    TEpoch, TGoal, TTraitType, TType, Typechecker,
+};
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum TImplWitness {
@@ -675,7 +680,7 @@ impl Typechecker<'_> {
         {
             if tr.lookup(self.ctx).types.contains_key(&name) {
                 if let Some(_other_tr) = candidate_tr {
-                    todo!("Die");
+                    return Err(AError::AmbiguousType { ty, use_span: span });
                 }
 
                 candidate_tr = Some(*tr);
@@ -685,7 +690,7 @@ impl Typechecker<'_> {
         if let Some(tr) = candidate_tr {
             self.do_goal_associated_type_trait(key, ty, tr, name, span)
         } else {
-            todo!("Die");
+            Err(AError::AmbiguousType { ty, use_span: span })
         }
     }
 
@@ -725,7 +730,7 @@ impl Typechecker<'_> {
         span: Span,
     ) -> AResult<Id<TType>> {
         if tr.lookup(self.ctx).generics.len() > 0 {
-            todo!("Die");
+            return Err(AError::AmbiguousType { ty, use_span: span });
         }
 
         self.assoc_traits.insert(key, TProvider::Trait(tr));
@@ -1427,6 +1432,18 @@ impl Typechecker<'_> {
         }
     }
 
+    pub fn do_goal_main(&mut self, id: Id<LFunction>) -> AResult<TImplWitness> {
+        let info = id.lookup(self.ctx);
+
+        let ty_span = info.return_ty.lookup(self.ctx).span;
+        let ty = self.initialize_ty(info.return_ty, &btreemap! {})?;
+        let trait_ty = TTraitType(self.ctx.lower_exit_value_item()?, vec![]).intern(self.ctx);
+
+        Ok(self
+            .do_goal_trait(ty, ty_span, trait_ty, ty_span, false)?
+            .unwrap())
+    }
+
     pub fn do_goal_object_safety(
         &mut self,
         tr: Id<LTrait>,
@@ -1580,6 +1597,17 @@ impl Typechecker<'_> {
         def_span: Span,
         use_span: Span,
     ) -> AResult<()> {
+        // The self ty is not object-safe on its own.
+        if ty == self_ty {
+            let trait_info = self_trait_ty.lookup(self.ctx).0.lookup(self.ctx);
+            return Err(AError::NotObjectSafeType {
+                trait_name: trait_info.name,
+                ty,
+                def_span,
+                use_span,
+            });
+        }
+
         match &*ty.lookup(self.ctx) {
             TType::MethodSkolem(_, _)
             | TType::GenericInfer(_)

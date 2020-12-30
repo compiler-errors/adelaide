@@ -1,5 +1,7 @@
-use asynchronous::*.
 use lang::*.
+
+use asynchronous::*.
+use exiting::*.
 use iterator::*.
 use option::{*, Option::{None, Some}}.
 use vector::*.
@@ -15,7 +17,6 @@ extern fn internal_undefined_value<T>() -> T.
 extern fn gc().
 extern fn print(s: String).
 extern fn unreachable<T>() -> T.
-extern fn exit(i: Int).
 extern fn breakpoint().
 extern fn type_id_of<T>() -> Int where T: Concrete.
 extern fn type_string_of<T>() -> String where T: Concrete.

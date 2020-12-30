@@ -9,7 +9,7 @@ use bumpalo::Bump;
 use crate::{
     ctx::AdelaideContext,
     lexer::Span,
-    lowering::{LFunction, LGlobal, LImpl, LModule, LTrait, LTypeData},
+    lowering::{LFunction, LGlobal, LImpl, LModule, LTrait},
     typechecker::{typecheck_program, TGoal, TImplWitness, TTraitType, TType, Typechecker},
     util::{AError, AResult, Id, Pretty, TryCollectVec, ZipExact},
 };
@@ -53,7 +53,7 @@ pub enum CFunctionId<'a> {
 }
 
 pub struct CProgram<'a> {
-    pub main: CFunctionId<'a>,
+    pub pre_main: CExpression<'a>,
     pub functions: HashMap<CFunctionId<'a>, CFunction<'a>>,
     pub globals: HashMap<Id<LGlobal>, CGlobal<'a>>,
     pub type_strings: HashMap<CType<'a>, &'a str>,
@@ -78,6 +78,8 @@ pub enum CFunction<'a> {
 #[derive(Debug, Copy, Clone)]
 pub struct CGlobal<'a> {
     pub name: &'a str,
+    pub name_id: Id<str>,
+    pub span: Span,
     pub slots: usize,
     pub body: CExpression<'a>,
 }
@@ -110,10 +112,11 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         let main = self
             .find_main(self.ctx.lower_program()?)?
             .ok_or(AError::MissingMain)?;
-        self.translate_function(main, &[])?;
+
+        let pre_main = self.translate_main(main)?;
 
         Ok(self.alloc.alloc_with(|| CProgram {
-            main: CFunctionId::Function(main, &[]),
+            pre_main,
             functions: self
                 .functions
                 .into_iter()
@@ -144,10 +147,7 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                 }
 
                 // The signature of main should be `fn main() -> ()`.
-                if !info.generics.is_empty()
-                    || !info.parameters.is_empty()
-                    || !matches!(&info.return_ty.lookup(self.ctx).data, LTypeData::Tuple(members) if members.is_empty())
-                {
+                if !info.generics.is_empty() || !info.parameters.is_empty() {
                     return Err(AError::BadMainSignature { span: info.span });
                 }
 
@@ -171,6 +171,32 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
         }
 
         Ok(main)
+    }
+
+    fn translate_main(&mut self, id: Id<LFunction>) -> AResult<CExpression<'a>> {
+        let main = self.translate_function(id, &[])?;
+
+        Typechecker::new_concrete(&self.typechecker, btreemap! {}).typecheck_loop_then_commit(
+            TGoal::TheProgram,
+            |tyck| {
+                tyck.do_goal_main(id)?;
+                Ok(())
+            },
+            |tyck| {
+                let witness = tyck.do_goal_main(id)?;
+                let finally = self.translate_method(
+                    &witness,
+                    self.ctx.static_name("finally"),
+                    &[],
+                    id.lookup(self.ctx).span,
+                )?;
+
+                Ok(CExpression::Call(
+                    finally,
+                    self.alloc.alloc_slice_copy(&[CExpression::Call(main, &[])]),
+                ))
+            },
+        )
     }
 
     fn translate_global(&mut self, id: Id<LGlobal>) -> AResult<()> {
@@ -199,6 +225,8 @@ impl<'ctx, 'a> Translator<'ctx, 'a> {
                 |tyck| {
                     Ok(CGlobal {
                         name: self.deintern_string(info.name),
+                        name_id: info.name,
+                        span: info.span,
                         slots: slots.len(),
                         body: self.translate_expr(info.expr, tyck, &slots)?,
                     })
